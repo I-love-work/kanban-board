@@ -18,13 +18,7 @@ The project demonstrates modern React patterns, drag-and-drop functionality, and
 
 ## 🧱 Project Structure
 
-── components/
-│ ├── Board.jsx # Main container holding all columns
-│ ├── Column.jsx # Individual column component
-│ └── Card.jsx # Task card component
-├── App.jsx # Root component
-├── index.js # Entry point
-└── styles/ # (Optional) Custom CSS or Tailwind config
+TBC
 
 ---
 
