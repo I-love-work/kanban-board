@@ -1,9 +1,11 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import { DragDropContext } from "@hello-pangea/dnd";
 import Column from "./Column";
-import { getTasks, updateTask } from "../api/taskApi";
+import { getTasks, updateTask, createTask } from "../api/taskApi";
 
 export default function Board({ columns, setColumns }) {
+  const [newTaskTitle, setNewTaskTitle] = useState("");
+
   useEffect(() => {
     async function fetchTasks() {
       try {
@@ -33,6 +35,25 @@ export default function Board({ columns, setColumns }) {
 
     fetchTasks();
   }, [setColumns]);
+
+  const handleAddTask = async () => {
+    const title = newTaskTitle.trim();
+    if (!title) return;
+
+    try {
+      const newTask = await createTask({ title, status: "todo" });
+      setColumns((prev) => ({
+        ...prev,
+        todo: {
+          ...prev.todo,
+          tasks: [...prev.todo.tasks, newTask],
+        },
+      }));
+      setNewTaskTitle("");
+    } catch (err) {
+      console.error("Failed to create task:", err);
+    }
+  };
 
   const onDragEnd = async (result) => {
     const { source, destination } = result;
@@ -74,21 +95,59 @@ export default function Board({ columns, setColumns }) {
   };
 
   return (
-    <DragDropContext onDragEnd={onDragEnd}>
+    <>
       <div
         style={{
           display: "flex",
-          gap: 16,
           justifyContent: "center",
-          alignItems: "flex-start",
-          marginTop: 24,
-          padding: 8,
+          alignItems: "center",
+          gap: 8,
+          marginTop: 20,
         }}
       >
-        {Object.entries(columns).map(([id, column]) => (
-          <Column key={id} droppableId={id} column={column} />
-        ))}
+        <input
+          type="text"
+          value={newTaskTitle}
+          onChange={(e) => setNewTaskTitle(e.target.value)}
+          placeholder="Enter new task..."
+          style={{
+            width: "300px",
+            padding: "8px",
+            borderRadius: "6px",
+            border: "1px solid #ccc",
+          }}
+        />
+        <button
+          onClick={handleAddTask}
+          style={{
+            padding: "8px 14px",
+            border: "none",
+            borderRadius: "6px",
+            backgroundColor: "#1976d2",
+            color: "white",
+            cursor: "pointer",
+          }}
+        >
+          Add Task
+        </button>
       </div>
-    </DragDropContext>
+
+      <DragDropContext onDragEnd={onDragEnd}>
+        <div
+          style={{
+            display: "flex",
+            gap: 16,
+            justifyContent: "center",
+            alignItems: "flex-start",
+            marginTop: 24,
+            padding: 8,
+          }}
+        >
+          {Object.entries(columns).map(([id, column]) => (
+            <Column key={id} droppableId={id} column={column} />
+          ))}
+        </div>
+      </DragDropContext>
+    </>
   );
 }

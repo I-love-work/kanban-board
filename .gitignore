@@ -21,5 +21,7 @@ yarn-error.log*
 .vscode/
 .idea/
 
-# Dependency locks (可选，若多人开发可保留)
-# package-lock.json
+# Ignore SQLite database files
+backend/*.db
+*.sqlite
+*.sqlite3
