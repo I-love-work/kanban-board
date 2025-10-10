@@ -13,12 +13,6 @@ app.use(
 );
 app.use(express.json());
 
-// let tasks = [
-//   { id: "1", title: "Learn React", status: "todo" },
-//   { id: "2", title: "Build Kanban Board", status: "inprogress" },
-//   { id: "3", title: "Setup Project Structure", status: "done" },
-// ];
-
 // get all tasks
 app.get("/api/tasks", (req, res) => {
   db.all("SELECT * FROM tasks", [], (err, rows) => {
@@ -43,6 +37,29 @@ app.post("/api/tasks", (req, res) => {
       res.status(201).json({ id, title, status: status || "todo" });
     }
   );
+});
+
+// update a task
+app.put("/api/tasks/:id", (req, res) => {
+  const { id } = req.params;
+  const { title, status } = req.body;
+  db.run(
+    "UPDATE tasks SET title = ?, status = ? WHERE id = ?",
+    [title, status, id],
+    (err) => {
+      if (err) return res.status(500).json({ error: err.message });
+      res.json({ message: "Task updated" });
+    }
+  );
+});
+
+// delete a task
+app.delete("/api/tasks/:id", (req, res) => {
+  const { id } = req.params;
+  db.run("DELETE FROM tasks WHERE id = ?", [id], (err) => {
+    if (err) return res.status(500).json({ error: err.message });
+    res.json({ message: "Task deleted" });
+  });
 });
 
 app.listen(5050, () => console.log("Backend running on http://localhost:5000"));

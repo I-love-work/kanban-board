@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { DragDropContext } from "@hello-pangea/dnd";
 import Column from "./Column";
-import { getTasks, updateTask, createTask } from "../api/taskApi";
+import { getTasks, updateTask, createTask, deleteTask } from "../api/taskApi";
 
 export default function Board({ columns, setColumns }) {
   const [newTaskTitle, setNewTaskTitle] = useState("");
@@ -32,10 +32,10 @@ export default function Board({ columns, setColumns }) {
         console.error("Failed to load tasks:", err);
       }
     }
-
     fetchTasks();
   }, [setColumns]);
 
+  // Add new task to "To Do" column
   const handleAddTask = async () => {
     const title = newTaskTitle.trim();
     if (!title) return;
@@ -52,6 +52,41 @@ export default function Board({ columns, setColumns }) {
       setNewTaskTitle("");
     } catch (err) {
       console.error("Failed to create task:", err);
+    }
+  };
+
+  const handleDeleteTask = async (columnId, taskId) => {
+    // Optimistically update UI
+    setColumns((prev) => ({
+      ...prev,
+      [columnId]: {
+        ...prev[columnId],
+        tasks: prev[columnId].tasks.filter((t) => t.id !== taskId),
+      },
+    }));
+    try {
+      await deleteTask(taskId);
+    } catch (err) {
+      console.error("Failed to delete task:", err);
+      // TODO: rollback UI update if needed
+    }
+  };
+
+  // Rename task title, including title
+  const handleRenameTask = async (columnId, taskId, newTitle) => {
+    const title = newTitle.trim();
+    if (!title) return;
+
+    setColumns((prev) => {
+      const updated = prev[columnId].tasks.map((t) =>
+        t.id === taskId ? { ...t, title } : t
+      );
+      return { ...prev, [columnId]: { ...prev[columnId], tasks: updated } };
+    });
+    try {
+      await updateTask(taskId, { title, status: columnId });
+    } catch (err) {
+      console.error("Failed to rename task:", err);
     }
   };
 
@@ -87,7 +122,10 @@ export default function Board({ columns, setColumns }) {
       });
 
       try {
-        await updateTask(moved.id, { status: destination.droppableId });
+        await updateTask(moved.id, {
+          title: moved.title,
+          status: destination.droppableId,
+        });
       } catch (err) {
         console.error("Failed to update task:", err);
       }
@@ -144,7 +182,13 @@ export default function Board({ columns, setColumns }) {
           }}
         >
           {Object.entries(columns).map(([id, column]) => (
-            <Column key={id} droppableId={id} column={column} />
+            <Column
+              key={id}
+              droppableId={id}
+              column={column}
+              onDelete={handleDeleteTask}
+              onRename={handleRenameTask}
+            />
           ))}
         </div>
       </DragDropContext>
