@@ -6,6 +6,22 @@ import { getTasks, updateTask, createTask, deleteTask } from "../api/taskApi";
 export default function Board({ columns, setColumns }) {
   const [newTaskTitle, setNewTaskTitle] = useState("");
 
+  const updateLocalTask = (columnId, taskId, updater) => {
+    let updatedTask;
+    setColumns((prev) => {
+      const column = prev[columnId];
+      if (!column) return prev;
+      const tasks = column.tasks.map((task) => {
+        if (task.id !== taskId) return task;
+        updatedTask = updater(task);
+        return updatedTask;
+      });
+      if (!updatedTask) return prev;
+      return { ...prev, [columnId]: { ...column, tasks } };
+    });
+    return updatedTask;
+  };
+
   useEffect(() => {
     async function fetchTasks() {
       try {
@@ -14,17 +30,23 @@ export default function Board({ columns, setColumns }) {
           todo: {
             id: "todo",
             name: "To Do",
-            tasks: data.filter((t) => t.status === "todo"),
+            tasks: data
+              .filter((t) => t.status === "todo")
+              .map((task) => ({ ...task, description: task.description || "" })),
           },
           inprogress: {
             id: "inprogress",
             name: "In Progress",
-            tasks: data.filter((t) => t.status === "inprogress"),
+            tasks: data
+              .filter((t) => t.status === "inprogress")
+              .map((task) => ({ ...task, description: task.description || "" })),
           },
           done: {
             id: "done",
             name: "Done",
-            tasks: data.filter((t) => t.status === "done"),
+            tasks: data
+              .filter((t) => t.status === "done")
+              .map((task) => ({ ...task, description: task.description || "" })),
           },
         };
         setColumns(grouped);
@@ -41,7 +63,7 @@ export default function Board({ columns, setColumns }) {
     if (!title) return;
 
     try {
-      const newTask = await createTask({ title, status: "todo" });
+      const newTask = await createTask({ title, description: "", status: "todo" });
       setColumns((prev) => ({
         ...prev,
         todo: {
@@ -72,21 +94,40 @@ export default function Board({ columns, setColumns }) {
     }
   };
 
-  // Rename task title, including title
-  const handleRenameTask = async (columnId, taskId, newTitle) => {
+  const handleTitleUpdate = async (columnId, taskId, newTitle) => {
     const title = newTitle.trim();
     if (!title) return;
 
-    setColumns((prev) => {
-      const updated = prev[columnId].tasks.map((t) =>
-        t.id === taskId ? { ...t, title } : t
-      );
-      return { ...prev, [columnId]: { ...prev[columnId], tasks: updated } };
-    });
+    const updatedTask = updateLocalTask(columnId, taskId, (task) => ({
+      ...task,
+      title,
+    }));
+    if (!updatedTask) return;
     try {
-      await updateTask(taskId, { title, status: columnId });
+      await updateTask(taskId, {
+        title: updatedTask.title,
+        description: updatedTask.description,
+        status: columnId,
+      });
     } catch (err) {
       console.error("Failed to rename task:", err);
+    }
+  };
+
+  const handleDescriptionUpdate = async (columnId, taskId, newDescription) => {
+    const updatedTask = updateLocalTask(columnId, taskId, (task) => ({
+      ...task,
+      description: newDescription,
+    }));
+    if (!updatedTask) return;
+    try {
+      await updateTask(taskId, {
+        title: updatedTask.title,
+        description: updatedTask.description,
+        status: columnId,
+      });
+    } catch (err) {
+      console.error("Failed to update task description:", err);
     }
   };
 
@@ -113,8 +154,13 @@ export default function Board({ columns, setColumns }) {
         [source.droppableId]: { ...sourceCol, tasks: sourceTasks },
       });
     } else {
+      const movedWithUpdates = {
+        ...moved,
+        status: destination.droppableId,
+        description: moved.description || "",
+      };
       const destTasks = Array.from(destCol.tasks);
-      destTasks.splice(destination.index, 0, moved);
+      destTasks.splice(destination.index, 0, movedWithUpdates);
       setColumns({
         ...columns,
         [source.droppableId]: { ...sourceCol, tasks: sourceTasks },
@@ -123,7 +169,8 @@ export default function Board({ columns, setColumns }) {
 
       try {
         await updateTask(moved.id, {
-          title: moved.title,
+          title: movedWithUpdates.title,
+          description: movedWithUpdates.description,
           status: destination.droppableId,
         });
       } catch (err) {
@@ -187,7 +234,8 @@ export default function Board({ columns, setColumns }) {
               droppableId={id}
               column={column}
               onDelete={handleDeleteTask}
-              onRename={handleRenameTask}
+              onTitleUpdate={handleTitleUpdate}
+              onDescriptionUpdate={handleDescriptionUpdate}
             />
           ))}
         </div>

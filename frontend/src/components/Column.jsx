@@ -2,7 +2,13 @@ import React from "react";
 import { Droppable } from "@hello-pangea/dnd";
 import Card from "./Card";
 
-export default function Column({ droppableId, column, onDelete, onRename }) {
+export default function Column({
+  droppableId,
+  column,
+  onDelete,
+  onTitleUpdate,
+  onDescriptionUpdate,
+}) {
   return (
     <div
       style={{
@@ -37,7 +43,10 @@ export default function Column({ droppableId, column, onDelete, onRename }) {
                 task={task}
                 index={index}
                 onDelete={() => onDelete(droppableId, task.id)}
-                onRename={(title) => onRename(droppableId, task.id, title)}
+                onTitleEdit={(title) => onTitleUpdate(droppableId, task.id, title)}
+                onDescriptionEdit={(description) =>
+                  onDescriptionUpdate(droppableId, task.id, description)
+                }
               />
             ))}
             {provided.placeholder}

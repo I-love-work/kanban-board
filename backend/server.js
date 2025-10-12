@@ -25,16 +25,18 @@ app.get("/api/tasks", (req, res) => {
 
 // create a new task
 app.post("/api/tasks", (req, res) => {
-  const { title, status } = req.body;
+  const { title, status, description } = req.body;
   const id = uuidv4();
   db.run(
-    "INSERT INTO tasks (id, title, status) VALUES (?, ?, ?)",
-    [id, title, status || "todo"],
+    "INSERT INTO tasks (id, title, description, status) VALUES (?, ?, ?, ?)",
+    [id, title, description || "", status || "todo"],
     function (err) {
       if (err) {
         return res.status(500).json({ error: err.message });
       }
-      res.status(201).json({ id, title, status: status || "todo" });
+      res
+        .status(201)
+        .json({ id, title, description: description || "", status: status || "todo" });
     }
   );
 });
@@ -42,13 +44,41 @@ app.post("/api/tasks", (req, res) => {
 // update a task
 app.put("/api/tasks/:id", (req, res) => {
   const { id } = req.params;
-  const { title, status } = req.body;
+  const { title, status, description } = req.body;
+
+  const updates = [];
+  const values = [];
+
+  if (title !== undefined) {
+    updates.push("title = ?");
+    values.push(title);
+  }
+  if (description !== undefined) {
+    updates.push("description = ?");
+    values.push(description);
+  }
+  if (status !== undefined) {
+    updates.push("status = ?");
+    values.push(status);
+  }
+
+  if (!updates.length) {
+    return res.status(400).json({ error: "No fields provided to update" });
+  }
+
+  values.push(id);
+
   db.run(
-    "UPDATE tasks SET title = ?, status = ? WHERE id = ?",
-    [title, status, id],
+    `UPDATE tasks SET ${updates.join(", ")} WHERE id = ?`,
+    values,
     (err) => {
       if (err) return res.status(500).json({ error: err.message });
-      res.json({ message: "Task updated" });
+      db.get("SELECT * FROM tasks WHERE id = ?", [id], (selectErr, row) => {
+        if (selectErr) {
+          return res.status(500).json({ error: selectErr.message });
+        }
+        res.json(row);
+      });
     }
   );
 });
@@ -62,4 +92,4 @@ app.delete("/api/tasks/:id", (req, res) => {
   });
 });
 
-app.listen(5050, () => console.log("Backend running on http://localhost:5000"));
+app.listen(5050, () => console.log("Backend running on http://localhost:5050"));
