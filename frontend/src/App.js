@@ -5,20 +5,17 @@ const initialColumns = {
   todo: {
     id: "todo",
     name: "To Do",
-    tasks: [
-      { id: "t1", title: "Learn React" },
-      { id: "t2", title: "Build Kanban Board" },
-    ],
+    tasks: [],
   },
   inprogress: {
     id: "inprogress",
     name: "In Progress",
-    tasks: [{ id: "t3", title: "Write Components" }],
+    tasks: [],
   },
   done: {
     id: "done",
     name: "Done",
-    tasks: [{ id: "t4", title: "Setup Project Structure" }],
+    tasks: [],
   },
 };
 
