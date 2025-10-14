@@ -8,6 +8,9 @@ export default function Column({
   onDelete,
   onTitleUpdate,
   onDescriptionUpdate,
+  onAttachmentUpload,
+  onAttachmentLink,
+  onAttachmentDelete,
 }) {
   return (
     <div
@@ -46,6 +49,15 @@ export default function Column({
                 onTitleEdit={(title) => onTitleUpdate(droppableId, task.id, title)}
                 onDescriptionEdit={(description) =>
                   onDescriptionUpdate(droppableId, task.id, description)
+                }
+                onAttachmentUpload={(files) =>
+                  onAttachmentUpload(droppableId, task.id, files)
+                }
+                onAttachmentLink={(data) =>
+                  onAttachmentLink(droppableId, task.id, data)
+                }
+                onAttachmentDelete={(attachment) =>
+                  onAttachmentDelete(droppableId, task.id, attachment)
                 }
               />
             ))}
