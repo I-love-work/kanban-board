@@ -1,7 +1,15 @@
 import React, { useEffect, useState } from "react";
 import { DragDropContext } from "@hello-pangea/dnd";
 import Column from "./Column";
-import { getTasks, updateTask, createTask, deleteTask } from "../api/taskApi";
+import {
+  getTasks,
+  updateTask,
+  createTask,
+  deleteTask,
+  uploadAttachment,
+  deleteAttachment as removeAttachmentApi,
+  createLinkAttachment,
+} from "../api/taskApi";
 
 export default function Board({ columns, setColumns }) {
   const [newTaskTitle, setNewTaskTitle] = useState("");
@@ -26,27 +34,32 @@ export default function Board({ columns, setColumns }) {
     async function fetchTasks() {
       try {
         const data = await getTasks();
+        const normalizeTask = (task) => ({
+          ...task,
+          description: task.description || "",
+          attachments: Array.isArray(task.attachments) ? task.attachments : [],
+        });
         const grouped = {
           todo: {
             id: "todo",
             name: "To Do",
             tasks: data
               .filter((t) => t.status === "todo")
-              .map((task) => ({ ...task, description: task.description || "" })),
+              .map(normalizeTask),
           },
           inprogress: {
             id: "inprogress",
             name: "In Progress",
             tasks: data
               .filter((t) => t.status === "inprogress")
-              .map((task) => ({ ...task, description: task.description || "" })),
+              .map(normalizeTask),
           },
           done: {
             id: "done",
             name: "Done",
             tasks: data
               .filter((t) => t.status === "done")
-              .map((task) => ({ ...task, description: task.description || "" })),
+              .map(normalizeTask),
           },
         };
         setColumns(grouped);
@@ -63,12 +76,23 @@ export default function Board({ columns, setColumns }) {
     if (!title) return;
 
     try {
-      const newTask = await createTask({ title, description: "", status: "todo" });
+      const newTask = await createTask({
+        title,
+        description: "",
+        status: "todo",
+      });
       setColumns((prev) => ({
         ...prev,
         todo: {
           ...prev.todo,
-          tasks: [...prev.todo.tasks, newTask],
+          tasks: [
+            ...prev.todo.tasks,
+            {
+              ...newTask,
+              description: newTask.description || "",
+              attachments: newTask.attachments || [],
+            },
+          ],
         },
       }));
       setNewTaskTitle("");
@@ -131,6 +155,52 @@ export default function Board({ columns, setColumns }) {
     }
   };
 
+  const appendAttachmentToTask = (columnId, taskId, attachment) => {
+    updateLocalTask(columnId, taskId, (task) => ({
+      ...task,
+      attachments: [...(task.attachments || []), attachment],
+    }));
+  };
+
+  const removeAttachmentFromTask = (columnId, taskId, attachmentId) => {
+    updateLocalTask(columnId, taskId, (task) => ({
+      ...task,
+      attachments: (task.attachments || []).filter(
+        (att) => att.id !== attachmentId
+      ),
+    }));
+  };
+
+  const handleAttachmentUpload = async (columnId, taskId, files) => {
+    const fileList = Array.isArray(files) ? files : [files];
+    for (const file of fileList) {
+      try {
+        const attachment = await uploadAttachment(taskId, file);
+        appendAttachmentToTask(columnId, taskId, attachment);
+      } catch (err) {
+        console.error("Failed to upload attachment:", err);
+      }
+    }
+  };
+
+  const handleAttachmentLink = async (columnId, taskId, linkData) => {
+    try {
+      const attachment = await createLinkAttachment(taskId, linkData);
+      appendAttachmentToTask(columnId, taskId, attachment);
+    } catch (err) {
+      console.error("Failed to add link attachment:", err);
+    }
+  };
+
+  const handleAttachmentDelete = async (columnId, taskId, attachment) => {
+    try {
+      await removeAttachmentApi(attachment.id);
+      removeAttachmentFromTask(columnId, taskId, attachment.id);
+    } catch (err) {
+      console.error("Failed to delete attachment:", err);
+    }
+  };
+
   const onDragEnd = async (result) => {
     const { source, destination } = result;
     if (!destination) return;
@@ -158,6 +228,9 @@ export default function Board({ columns, setColumns }) {
         ...moved,
         status: destination.droppableId,
         description: moved.description || "",
+        attachments: Array.isArray(moved.attachments)
+          ? moved.attachments
+          : [],
       };
       const destTasks = Array.from(destCol.tasks);
       destTasks.splice(destination.index, 0, movedWithUpdates);
@@ -236,6 +309,9 @@ export default function Board({ columns, setColumns }) {
               onDelete={handleDeleteTask}
               onTitleUpdate={handleTitleUpdate}
               onDescriptionUpdate={handleDescriptionUpdate}
+              onAttachmentUpload={handleAttachmentUpload}
+              onAttachmentLink={handleAttachmentLink}
+              onAttachmentDelete={handleAttachmentDelete}
             />
           ))}
         </div>
