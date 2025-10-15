@@ -32,3 +32,12 @@ export const createLinkAttachment = async (taskId, data) =>
 
 export const deleteAttachment = async (attachmentId) =>
   (await axios.delete(`${API_URL}/attachments/${attachmentId}`)).data;
+
+export const createTag = async (taskId, data) =>
+  (await axios.post(`${API_URL}/tasks/${taskId}/tags`, data)).data;
+
+export const updateTag = async (tagId, data) =>
+  (await axios.put(`${API_URL}/tags/${tagId}`, data)).data;
+
+export const deleteTag = async (tagId) =>
+  (await axios.delete(`${API_URL}/tags/${tagId}`)).data;

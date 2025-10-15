@@ -11,6 +11,9 @@ export default function Column({
   onAttachmentUpload,
   onAttachmentLink,
   onAttachmentDelete,
+  onTagCreate,
+  onTagUpdate,
+  onTagDelete,
 }) {
   return (
     <div
@@ -59,6 +62,13 @@ export default function Column({
                 onAttachmentDelete={(attachment) =>
                   onAttachmentDelete(droppableId, task.id, attachment)
                 }
+                onTagCreate={(tagData) =>
+                  onTagCreate(droppableId, task.id, tagData)
+                }
+                onTagUpdate={(tagId, tagData) =>
+                  onTagUpdate(droppableId, task.id, tagId, tagData)
+                }
+                onTagDelete={(tagId) => onTagDelete(droppableId, task.id, tagId)}
               />
             ))}
             {provided.placeholder}

@@ -9,6 +9,9 @@ import {
   uploadAttachment,
   deleteAttachment as removeAttachmentApi,
   createLinkAttachment,
+  createTag as createTagApi,
+  updateTag as updateTagApi,
+  deleteTag as removeTagApi,
 } from "../api/taskApi";
 
 export default function Board({ columns, setColumns }) {
@@ -38,6 +41,7 @@ export default function Board({ columns, setColumns }) {
           ...task,
           description: task.description || "",
           attachments: Array.isArray(task.attachments) ? task.attachments : [],
+          tags: Array.isArray(task.tags) ? task.tags : [],
         });
         const grouped = {
           todo: {
@@ -91,6 +95,7 @@ export default function Board({ columns, setColumns }) {
               ...newTask,
               description: newTask.description || "",
               attachments: newTask.attachments || [],
+              tags: newTask.tags || [],
             },
           ],
         },
@@ -201,6 +206,59 @@ export default function Board({ columns, setColumns }) {
     }
   };
 
+  const appendTagToTask = (columnId, taskId, tag) => {
+    updateLocalTask(columnId, taskId, (task) => ({
+      ...task,
+      tags: [...(task.tags || []), tag],
+    }));
+  };
+
+  const updateTagOnTask = (columnId, taskId, tag) => {
+    updateLocalTask(columnId, taskId, (task) => ({
+      ...task,
+      tags: (task.tags || []).map((existing) =>
+        existing.id === tag.id ? tag : existing
+      ),
+    }));
+  };
+
+  const removeTagFromTask = (columnId, taskId, tagId) => {
+    updateLocalTask(columnId, taskId, (task) => ({
+      ...task,
+      tags: (task.tags || []).filter((existing) => existing.id !== tagId),
+    }));
+  };
+
+  const handleTagCreate = async (columnId, taskId, tagData) => {
+    try {
+      const created = await createTagApi(taskId, tagData);
+      appendTagToTask(columnId, taskId, created);
+    } catch (err) {
+      console.error("Failed to create tag:", err);
+      throw err;
+    }
+  };
+
+  const handleTagUpdate = async (columnId, taskId, tagId, tagData) => {
+    try {
+      const updated = await updateTagApi(tagId, tagData);
+      updateTagOnTask(columnId, taskId, updated);
+    } catch (err) {
+      console.error("Failed to update tag:", err);
+      throw err;
+    }
+  };
+
+  const handleTagDelete = async (columnId, taskId, tagId) => {
+    try {
+      await removeTagApi(tagId);
+      removeTagFromTask(columnId, taskId, tagId);
+    } catch (err) {
+      console.error("Failed to delete tag:", err);
+      throw err;
+    }
+  };
+
   const onDragEnd = async (result) => {
     const { source, destination } = result;
     if (!destination) return;
@@ -231,6 +289,7 @@ export default function Board({ columns, setColumns }) {
         attachments: Array.isArray(moved.attachments)
           ? moved.attachments
           : [],
+        tags: Array.isArray(moved.tags) ? moved.tags : [],
       };
       const destTasks = Array.from(destCol.tasks);
       destTasks.splice(destination.index, 0, movedWithUpdates);
@@ -312,6 +371,9 @@ export default function Board({ columns, setColumns }) {
               onAttachmentUpload={handleAttachmentUpload}
               onAttachmentLink={handleAttachmentLink}
               onAttachmentDelete={handleAttachmentDelete}
+              onTagCreate={handleTagCreate}
+              onTagUpdate={handleTagUpdate}
+              onTagDelete={handleTagDelete}
             />
           ))}
         </div>

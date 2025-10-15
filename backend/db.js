@@ -51,6 +51,19 @@ db.serialize(() => {
   db.run(
     "CREATE INDEX IF NOT EXISTS idx_attachments_task_id ON attachments(task_id)"
   );
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS tags (
+      id TEXT PRIMARY KEY,
+      task_id TEXT NOT NULL,
+      label TEXT NOT NULL,
+      color TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+    )
+  `);
+
+  db.run("CREATE INDEX IF NOT EXISTS idx_tags_task_id ON tags(task_id)");
 });
 
 module.exports = db;
