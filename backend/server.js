@@ -49,18 +49,37 @@ const formatAttachment = (row, req) => {
   };
 };
 
-const attachAttachmentsToTasks = (tasks, attachments, req) => {
-  const grouped = attachments.reduce((acc, attachment) => {
+const formatTag = (row) => {
+  if (!row) return null;
+  return {
+    id: row.id,
+    taskId: row.task_id,
+    label: row.label,
+    color: row.color,
+    createdAt: row.created_at,
+  };
+};
+
+const mergeTaskRelations = (tasks, attachments, tags, req) => {
+  const attachmentMap = attachments.reduce((acc, attachment) => {
     const list = acc.get(attachment.task_id) || [];
     list.push(formatAttachment(attachment, req));
     acc.set(attachment.task_id, list);
     return acc;
   }, new Map());
 
+  const tagMap = tags.reduce((acc, tag) => {
+    const list = acc.get(tag.task_id) || [];
+    list.push(formatTag(tag));
+    acc.set(tag.task_id, list);
+    return acc;
+  }, new Map());
+
   return tasks.map((task) => ({
     ...task,
     description: task.description || "",
-    attachments: grouped.get(task.id) || [],
+    attachments: attachmentMap.get(task.id) || [],
+    tags: tagMap.get(task.id) || [],
   }));
 };
 
@@ -74,7 +93,12 @@ app.get("/api/tasks", (req, res) => {
       if (attachmentErr) {
         return res.status(500).json({ error: attachmentErr.message });
       }
-      res.json(attachAttachmentsToTasks(tasks, attachments, req));
+      db.all("SELECT * FROM tags", [], (tagErr, tags) => {
+        if (tagErr) {
+          return res.status(500).json({ error: tagErr.message });
+        }
+        res.json(mergeTaskRelations(tasks, attachments, tags, req));
+      });
     });
   });
 });
@@ -95,7 +119,14 @@ app.post("/api/tasks", (req, res) => {
       }
       res
         .status(201)
-        .json({ id, title, description: description || "", status: status || "todo", attachments: [] });
+        .json({
+          id,
+          title,
+          description: description || "",
+          status: status || "todo",
+          attachments: [],
+          tags: [],
+        });
     }
   );
 });
@@ -143,11 +174,21 @@ app.put("/api/tasks/:id", (req, res) => {
           if (attachmentErr) {
             return res.status(500).json({ error: attachmentErr.message });
           }
-          res.json({
-            ...taskRow,
-            description: taskRow.description || "",
-            attachments: attachmentRows.map((row) => formatAttachment(row, req)),
-          });
+          db.all(
+            "SELECT * FROM tags WHERE task_id = ?",
+            [id],
+            (tagErr, tagRows) => {
+              if (tagErr) {
+                return res.status(500).json({ error: tagErr.message });
+              }
+              res.json({
+                ...taskRow,
+                description: taskRow.description || "",
+                attachments: attachmentRows.map((row) => formatAttachment(row, req)),
+                tags: tagRows.map((row) => formatTag(row)),
+              });
+            }
+          );
         }
       );
     });
@@ -322,6 +363,128 @@ app.delete("/api/attachments/:attachmentId", (req, res) => {
       });
     }
   );
+});
+
+// get tags for a task
+app.get("/api/tasks/:id/tags", (req, res) => {
+  const { id } = req.params;
+  db.all(
+    "SELECT * FROM tags WHERE task_id = ? ORDER BY datetime(created_at) DESC",
+    [id],
+    (err, rows) => {
+      if (err) {
+        return res.status(500).json({ error: err.message });
+      }
+      res.json(rows.map((row) => formatTag(row)));
+    }
+  );
+});
+
+// create a tag for a task
+app.post("/api/tasks/:id/tags", (req, res) => {
+  const { id } = req.params;
+  const { label, color } = req.body || {};
+
+  const trimmedLabel = typeof label === "string" ? label.trim() : "";
+  if (!trimmedLabel) {
+    return res.status(400).json({ error: "Label is required" });
+  }
+  const normalizedColor =
+    typeof color === "string" && color.trim() ? color.trim() : "#1976d2";
+
+  db.get("SELECT id FROM tasks WHERE id = ?", [id], (taskErr, taskRow) => {
+    if (taskErr) {
+      return res.status(500).json({ error: taskErr.message });
+    }
+    if (!taskRow) {
+      return res.status(404).json({ error: "Task not found" });
+    }
+
+    const tagId = uuidv4();
+    db.run(
+      `
+      INSERT INTO tags (id, task_id, label, color)
+      VALUES (?, ?, ?, ?)
+    `,
+      [tagId, id, trimmedLabel, normalizedColor],
+      (insertErr) => {
+        if (insertErr) {
+          return res.status(500).json({ error: insertErr.message });
+        }
+        db.get("SELECT * FROM tags WHERE id = ?", [tagId], (selectErr, row) => {
+          if (selectErr) {
+            return res.status(500).json({ error: selectErr.message });
+          }
+          res.status(201).json(formatTag(row));
+        });
+      }
+    );
+  });
+});
+
+// update a tag
+app.put("/api/tags/:tagId", (req, res) => {
+  const { tagId } = req.params;
+  const { label, color } = req.body || {};
+
+  const updates = [];
+  const values = [];
+
+  if (label !== undefined) {
+    const trimmedLabel = typeof label === "string" ? label.trim() : "";
+    if (!trimmedLabel) {
+      return res.status(400).json({ error: "Label cannot be empty" });
+    }
+    updates.push("label = ?");
+    values.push(trimmedLabel);
+  }
+  if (color !== undefined) {
+    const normalizedColor =
+      typeof color === "string" && color.trim() ? color.trim() : "#1976d2";
+    updates.push("color = ?");
+    values.push(normalizedColor);
+  }
+
+  if (!updates.length) {
+    return res.status(400).json({ error: "No fields provided to update" });
+  }
+
+  values.push(tagId);
+
+  db.run(`UPDATE tags SET ${updates.join(", ")} WHERE id = ?`, values, (err) => {
+    if (err) {
+      return res.status(500).json({ error: err.message });
+    }
+    db.get("SELECT * FROM tags WHERE id = ?", [tagId], (selectErr, row) => {
+      if (selectErr) {
+        return res.status(500).json({ error: selectErr.message });
+      }
+      if (!row) {
+        return res.status(404).json({ error: "Tag not found" });
+      }
+      res.json(formatTag(row));
+    });
+  });
+});
+
+// delete a tag
+app.delete("/api/tags/:tagId", (req, res) => {
+  const { tagId } = req.params;
+  db.get("SELECT * FROM tags WHERE id = ?", [tagId], (selectErr, row) => {
+    if (selectErr) {
+      return res.status(500).json({ error: selectErr.message });
+    }
+    if (!row) {
+      return res.status(404).json({ error: "Tag not found" });
+    }
+
+    db.run("DELETE FROM tags WHERE id = ?", [tagId], (err) => {
+      if (err) {
+        return res.status(500).json({ error: err.message });
+      }
+      res.json({ message: "Tag deleted" });
+    });
+  });
 });
 
 app.listen(5050, () => console.log("Backend running on http://localhost:5050"));
