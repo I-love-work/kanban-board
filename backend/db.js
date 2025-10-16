@@ -3,15 +3,41 @@ const sqlite3 = require("sqlite3").verbose();
 
 const db = new sqlite3.Database(path.resolve(__dirname, "./kanban.db"));
 
+const ensureTaskUserIndex = () => {
+  db.run(
+    "CREATE INDEX IF NOT EXISTS idx_tasks_user_id ON tasks(user_id)",
+    (err) => {
+      if (err) {
+        if (err.message && err.message.includes("no such column: user_id")) {
+          return;
+        }
+        console.error("Failed to create idx_tasks_user_id index:", err);
+      }
+    }
+  );
+};
+
 db.serialize(() => {
   db.run("PRAGMA foreign_keys = ON");
 
   db.run(`
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      email TEXT NOT NULL UNIQUE,
+      password_hash TEXT NOT NULL,
+      name TEXT,
+      created_at TEXT DEFAULT (datetime('now'))
+    )
+  `);
+
+  db.run(`
     CREATE TABLE IF NOT EXISTS tasks (
       id TEXT PRIMARY KEY,
+      user_id TEXT,
       title TEXT NOT NULL,
       description TEXT DEFAULT '',
-      status TEXT NOT NULL
+      status TEXT NOT NULL,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     )
   `);
 
@@ -20,7 +46,10 @@ db.serialize(() => {
       console.error("Failed to inspect tasks table:", err);
       return;
     }
-    const hasDescription = columns.some((column) => column.name === "description");
+    const hasDescription = columns.some(
+      (column) => column.name === "description"
+    );
+    const hasUserId = columns.some((column) => column.name === "user_id");
     if (!hasDescription) {
       db.run(
         "ALTER TABLE tasks ADD COLUMN description TEXT DEFAULT ''",
@@ -30,6 +59,17 @@ db.serialize(() => {
           }
         }
       );
+    }
+    if (!hasUserId) {
+      db.run("ALTER TABLE tasks ADD COLUMN user_id TEXT", (alterErr) => {
+        if (alterErr) {
+          console.error("Failed to add user_id column:", alterErr);
+        } else {
+          ensureTaskUserIndex();
+        }
+      });
+    } else {
+      ensureTaskUserIndex();
     }
   });
 

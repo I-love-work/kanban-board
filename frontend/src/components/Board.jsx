@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { DragDropContext } from "@hello-pangea/dnd";
 import Column from "./Column";
 import {
@@ -14,8 +14,18 @@ import {
   deleteTag as removeTagApi,
 } from "../api/taskApi";
 
-export default function Board({ columns, setColumns }) {
+export default function Board({ columns, setColumns, onAuthError }) {
   const [newTaskTitle, setNewTaskTitle] = useState("");
+
+  const handleApiError = useCallback(
+    (err, context) => {
+      console.error(context, err);
+      if (err?.response?.status === 401 && typeof onAuthError === "function") {
+        onAuthError();
+      }
+    },
+    [onAuthError]
+  );
 
   const updateLocalTask = (columnId, taskId, updater) => {
     let updatedTask;
@@ -68,11 +78,11 @@ export default function Board({ columns, setColumns }) {
         };
         setColumns(grouped);
       } catch (err) {
-        console.error("Failed to load tasks:", err);
+        handleApiError(err, "Failed to load tasks");
       }
     }
     fetchTasks();
-  }, [setColumns]);
+  }, [setColumns, handleApiError]);
 
   // Add new task to "To Do" column
   const handleAddTask = async () => {
@@ -102,7 +112,7 @@ export default function Board({ columns, setColumns }) {
       }));
       setNewTaskTitle("");
     } catch (err) {
-      console.error("Failed to create task:", err);
+      handleApiError(err, "Failed to create task");
     }
   };
 
@@ -118,7 +128,7 @@ export default function Board({ columns, setColumns }) {
     try {
       await deleteTask(taskId);
     } catch (err) {
-      console.error("Failed to delete task:", err);
+      handleApiError(err, "Failed to delete task");
       // TODO: rollback UI update if needed
     }
   };
@@ -139,7 +149,7 @@ export default function Board({ columns, setColumns }) {
         status: columnId,
       });
     } catch (err) {
-      console.error("Failed to rename task:", err);
+      handleApiError(err, "Failed to rename task");
     }
   };
 
@@ -156,7 +166,7 @@ export default function Board({ columns, setColumns }) {
         status: columnId,
       });
     } catch (err) {
-      console.error("Failed to update task description:", err);
+      handleApiError(err, "Failed to update task description");
     }
   };
 
@@ -183,7 +193,7 @@ export default function Board({ columns, setColumns }) {
         const attachment = await uploadAttachment(taskId, file);
         appendAttachmentToTask(columnId, taskId, attachment);
       } catch (err) {
-        console.error("Failed to upload attachment:", err);
+        handleApiError(err, "Failed to upload attachment");
       }
     }
   };
@@ -193,7 +203,7 @@ export default function Board({ columns, setColumns }) {
       const attachment = await createLinkAttachment(taskId, linkData);
       appendAttachmentToTask(columnId, taskId, attachment);
     } catch (err) {
-      console.error("Failed to add link attachment:", err);
+      handleApiError(err, "Failed to add link attachment");
     }
   };
 
@@ -202,7 +212,7 @@ export default function Board({ columns, setColumns }) {
       await removeAttachmentApi(attachment.id);
       removeAttachmentFromTask(columnId, taskId, attachment.id);
     } catch (err) {
-      console.error("Failed to delete attachment:", err);
+      handleApiError(err, "Failed to delete attachment");
     }
   };
 
@@ -234,7 +244,7 @@ export default function Board({ columns, setColumns }) {
       const created = await createTagApi(taskId, tagData);
       appendTagToTask(columnId, taskId, created);
     } catch (err) {
-      console.error("Failed to create tag:", err);
+      handleApiError(err, "Failed to create tag");
       throw err;
     }
   };
@@ -244,7 +254,7 @@ export default function Board({ columns, setColumns }) {
       const updated = await updateTagApi(tagId, tagData);
       updateTagOnTask(columnId, taskId, updated);
     } catch (err) {
-      console.error("Failed to update tag:", err);
+      handleApiError(err, "Failed to update tag");
       throw err;
     }
   };
@@ -254,7 +264,7 @@ export default function Board({ columns, setColumns }) {
       await removeTagApi(tagId);
       removeTagFromTask(columnId, taskId, tagId);
     } catch (err) {
-      console.error("Failed to delete tag:", err);
+      handleApiError(err, "Failed to delete tag");
       throw err;
     }
   };
@@ -306,7 +316,7 @@ export default function Board({ columns, setColumns }) {
           status: destination.droppableId,
         });
       } catch (err) {
-        console.error("Failed to update task:", err);
+        handleApiError(err, "Failed to update task");
       }
     }
   };

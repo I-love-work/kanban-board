@@ -3,10 +3,15 @@ const cors = require("cors");
 const fs = require("fs");
 const path = require("path");
 const multer = require("multer");
+const bcrypt = require("bcryptjs");
+const jwt = require("jsonwebtoken");
 const { v4: uuidv4 } = require("uuid");
 const db = require("./db");
 
 const app = express();
+
+const JWT_SECRET = process.env.JWT_SECRET || "dev-secret";
+const TOKEN_EXPIRY = process.env.JWT_EXPIRY || "7d";
 
 const UPLOAD_DIR = path.join(__dirname, "uploads");
 if (!fs.existsSync(UPLOAD_DIR)) {
@@ -21,11 +26,87 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage });
 
+const dbRun = (sql, params = []) =>
+  new Promise((resolve, reject) => {
+    db.run(sql, params, function (err) {
+      if (err) reject(err);
+      else resolve(this);
+    });
+  });
+
+const dbGet = (sql, params = []) =>
+  new Promise((resolve, reject) => {
+    db.get(sql, params, (err, row) => {
+      if (err) reject(err);
+      else resolve(row);
+    });
+  });
+
+const dbAll = (sql, params = []) =>
+  new Promise((resolve, reject) => {
+    db.all(sql, params, (err, rows) => {
+      if (err) reject(err);
+      else resolve(rows);
+    });
+  });
+
+const sanitizeUser = (userRow) =>
+  userRow
+    ? {
+        id: userRow.id,
+        email: userRow.email,
+        name: userRow.name || "",
+        createdAt: userRow.created_at || userRow.createdAt || null,
+      }
+    : null;
+
+const generateToken = (userRow) =>
+  jwt.sign({ id: userRow.id, email: userRow.email }, JWT_SECRET, {
+    expiresIn: TOKEN_EXPIRY,
+  });
+
+const authenticate = async (req, res, next) => {
+  try {
+    const authHeader = req.headers.authorization || "";
+    const token = authHeader.startsWith("Bearer ")
+      ? authHeader.slice(7)
+      : null;
+
+    if (!token) {
+      return res.status(401).json({ error: "Authentication required" });
+    }
+
+    let payload;
+    try {
+      payload = jwt.verify(token, JWT_SECRET);
+    } catch (err) {
+      return res.status(401).json({ error: "Invalid or expired token" });
+    }
+
+    const userRow = await dbGet(
+      "SELECT id, email, name, created_at FROM users WHERE id = ?",
+      [payload.id]
+    );
+
+    if (!userRow) {
+      return res.status(401).json({ error: "User not found" });
+    }
+
+    req.user = sanitizeUser(userRow);
+    next();
+  } catch (err) {
+    next(err);
+  }
+};
+
+const ensureTaskOwnership = async (taskId, userId) =>
+  dbGet("SELECT * FROM tasks WHERE id = ? AND user_id = ?", [taskId, userId]);
+
 app.use(
   cors({
     origin: "*",
     methods: ["GET", "POST", "PUT", "DELETE"],
-    allowedHeaders: ["Content-Type"],
+    allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
 app.use(express.json());
@@ -83,178 +164,302 @@ const mergeTaskRelations = (tasks, attachments, tags, req) => {
   }));
 };
 
-// get all tasks
-app.get("/api/tasks", (req, res) => {
-  db.all("SELECT * FROM tasks", [], (taskErr, tasks) => {
-    if (taskErr) {
-      return res.status(500).json({ error: taskErr.message });
+app.post("/api/auth/register", async (req, res, next) => {
+  try {
+    const emailRaw = (req.body.email || "").trim().toLowerCase();
+    const password = req.body.password || "";
+    const name =
+      typeof req.body.name === "string" ? req.body.name.trim() : "";
+
+    if (!emailRaw) {
+      return res.status(400).json({ error: "Email is required" });
     }
-    db.all("SELECT * FROM attachments", [], (attachmentErr, attachments) => {
-      if (attachmentErr) {
-        return res.status(500).json({ error: attachmentErr.message });
-      }
-      db.all("SELECT * FROM tags", [], (tagErr, tags) => {
-        if (tagErr) {
-          return res.status(500).json({ error: tagErr.message });
-        }
-        res.json(mergeTaskRelations(tasks, attachments, tags, req));
-      });
-    });
-  });
+    if (!password) {
+      return res.status(400).json({ error: "Password is required" });
+    }
+    if (password.length < 6) {
+      return res
+        .status(400)
+        .json({ error: "Password must be at least 6 characters" });
+    }
+
+    const existingUser = await dbGet(
+      "SELECT id FROM users WHERE email = ?",
+      [emailRaw]
+    );
+    if (existingUser) {
+      return res.status(409).json({ error: "Email already registered" });
+    }
+
+    const passwordHash = await bcrypt.hash(password, 10);
+    const userId = uuidv4();
+
+    await dbRun(
+      "INSERT INTO users (id, email, password_hash, name) VALUES (?, ?, ?, ?)",
+      [userId, emailRaw, passwordHash, name || null]
+    );
+
+    const userRow = await dbGet(
+      "SELECT id, email, name, created_at FROM users WHERE id = ?",
+      [userId]
+    );
+
+    const token = generateToken(userRow);
+    res.status(201).json({ user: sanitizeUser(userRow), token });
+  } catch (err) {
+    if (err?.code === "SQLITE_CONSTRAINT") {
+      return res.status(409).json({ error: "Email already registered" });
+    }
+    next(err);
+  }
+});
+
+app.post("/api/auth/login", async (req, res, next) => {
+  try {
+    const emailRaw = (req.body.email || "").trim().toLowerCase();
+    const password = req.body.password || "";
+
+    if (!emailRaw || !password) {
+      return res.status(400).json({ error: "Email and password required" });
+    }
+
+    const userRow = await dbGet(
+      "SELECT id, email, name, password_hash, created_at FROM users WHERE email = ?",
+      [emailRaw]
+    );
+
+    if (!userRow) {
+      return res.status(401).json({ error: "Invalid credentials" });
+    }
+
+    const passwordMatch = await bcrypt.compare(password, userRow.password_hash);
+    if (!passwordMatch) {
+      return res.status(401).json({ error: "Invalid credentials" });
+    }
+
+    const token = generateToken(userRow);
+    res.json({ user: sanitizeUser(userRow), token });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get("/api/auth/me", authenticate, (req, res) => {
+  res.json({ user: req.user });
+});
+
+// get all tasks
+app.get("/api/tasks", authenticate, async (req, res, next) => {
+  try {
+    const tasks = await dbAll(
+      "SELECT * FROM tasks WHERE user_id = ? ORDER BY rowid ASC",
+      [req.user.id]
+    );
+    const attachments = await dbAll(
+      `
+      SELECT a.*
+      FROM attachments a
+      INNER JOIN tasks t ON a.task_id = t.id
+      WHERE t.user_id = ?
+    `,
+      [req.user.id]
+    );
+    const tags = await dbAll(
+      `
+      SELECT tg.*
+      FROM tags tg
+      INNER JOIN tasks t ON tg.task_id = t.id
+      WHERE t.user_id = ?
+    `,
+      [req.user.id]
+    );
+    res.json(mergeTaskRelations(tasks, attachments, tags, req));
+  } catch (err) {
+    next(err);
+  }
 });
 
 // create a new task
-app.post("/api/tasks", (req, res) => {
-  const { title, status, description } = req.body;
-  if (!title) {
-    return res.status(400).json({ error: "Title is required" });
-  }
-  const id = uuidv4();
-  db.run(
-    "INSERT INTO tasks (id, title, description, status) VALUES (?, ?, ?, ?)",
-    [id, title, description || "", status || "todo"],
-    (err) => {
-      if (err) {
-        return res.status(500).json({ error: err.message });
-      }
-      res
-        .status(201)
-        .json({
-          id,
-          title,
-          description: description || "",
-          status: status || "todo",
-          attachments: [],
-          tags: [],
-        });
+app.post("/api/tasks", authenticate, async (req, res, next) => {
+  try {
+    const { title, status, description } = req.body || {};
+    const trimmedTitle = typeof title === "string" ? title.trim() : "";
+    if (!trimmedTitle) {
+      return res.status(400).json({ error: "Title is required" });
     }
-  );
+    const normalizedStatus =
+      typeof status === "string" && status.trim() ? status.trim() : "todo";
+    const descriptionText =
+      typeof description === "string" ? description : "";
+    const id = uuidv4();
+    await dbRun(
+      "INSERT INTO tasks (id, user_id, title, description, status) VALUES (?, ?, ?, ?, ?)",
+      [id, req.user.id, trimmedTitle, descriptionText, normalizedStatus]
+    );
+    res.status(201).json({
+      id,
+      title: trimmedTitle,
+      description: descriptionText,
+      status: normalizedStatus,
+      attachments: [],
+      tags: [],
+    });
+  } catch (err) {
+    next(err);
+  }
 });
 
 // update a task
-app.put("/api/tasks/:id", (req, res) => {
+app.put("/api/tasks/:id", authenticate, async (req, res, next) => {
   const { id } = req.params;
-  const { title, status, description } = req.body;
+  const { title, status, description } = req.body || {};
 
   const updates = [];
   const values = [];
 
   if (title !== undefined) {
+    const trimmedTitle = typeof title === "string" ? title.trim() : "";
+    if (!trimmedTitle) {
+      return res.status(400).json({ error: "Title cannot be empty" });
+    }
     updates.push("title = ?");
-    values.push(title);
+    values.push(trimmedTitle);
   }
+
   if (description !== undefined) {
+    const descriptionText =
+      typeof description === "string" ? description : "";
     updates.push("description = ?");
-    values.push(description);
+    values.push(descriptionText);
   }
+
   if (status !== undefined) {
+    const normalizedStatus =
+      typeof status === "string" && status.trim() ? status.trim() : "";
+    if (!normalizedStatus) {
+      return res.status(400).json({ error: "Status cannot be empty" });
+    }
     updates.push("status = ?");
-    values.push(status);
+    values.push(normalizedStatus);
   }
 
   if (!updates.length) {
     return res.status(400).json({ error: "No fields provided to update" });
   }
 
-  values.push(id);
+  values.push(id, req.user.id);
 
-  db.run(`UPDATE tasks SET ${updates.join(", ")} WHERE id = ?`, values, (err) => {
-    if (err) return res.status(500).json({ error: err.message });
-    db.get("SELECT * FROM tasks WHERE id = ?", [id], (selectErr, taskRow) => {
-      if (selectErr) {
-        return res.status(500).json({ error: selectErr.message });
-      }
-      if (!taskRow) {
-        return res.status(404).json({ error: "Task not found" });
-      }
-      db.all(
-        "SELECT * FROM attachments WHERE task_id = ?",
-        [id],
-        (attachmentErr, attachmentRows) => {
-          if (attachmentErr) {
-            return res.status(500).json({ error: attachmentErr.message });
-          }
-          db.all(
-            "SELECT * FROM tags WHERE task_id = ?",
-            [id],
-            (tagErr, tagRows) => {
-              if (tagErr) {
-                return res.status(500).json({ error: tagErr.message });
-              }
-              res.json({
-                ...taskRow,
-                description: taskRow.description || "",
-                attachments: attachmentRows.map((row) => formatAttachment(row, req)),
-                tags: tagRows.map((row) => formatTag(row)),
-              });
-            }
-          );
-        }
-      );
+  try {
+    const result = await dbRun(
+      `UPDATE tasks SET ${updates.join(", ")} WHERE id = ? AND user_id = ?`,
+      values
+    );
+
+    if (!result.changes) {
+      return res.status(404).json({ error: "Task not found" });
+    }
+
+    const taskRow = await dbGet(
+      "SELECT * FROM tasks WHERE id = ? AND user_id = ?",
+      [id, req.user.id]
+    );
+    const attachmentRows = await dbAll(
+      "SELECT * FROM attachments WHERE task_id = ?",
+      [id]
+    );
+    const tagRows = await dbAll("SELECT * FROM tags WHERE task_id = ?", [id]);
+
+    res.json({
+      ...taskRow,
+      description: taskRow.description || "",
+      attachments: attachmentRows.map((row) => formatAttachment(row, req)),
+      tags: tagRows.map((row) => formatTag(row)),
     });
-  });
+  } catch (err) {
+    next(err);
+  }
 });
 
 // delete a task (and its attachments)
-app.delete("/api/tasks/:id", (req, res) => {
+app.delete("/api/tasks/:id", authenticate, async (req, res, next) => {
   const { id } = req.params;
-  db.all("SELECT * FROM attachments WHERE task_id = ?", [id], (fetchErr, rows) => {
-    if (fetchErr) {
-      return res.status(500).json({ error: fetchErr.message });
+  try {
+    const taskRow = await ensureTaskOwnership(id, req.user.id);
+    if (!taskRow) {
+      return res.status(404).json({ error: "Task not found" });
     }
-    db.run("DELETE FROM tasks WHERE id = ?", [id], (err) => {
-      if (err) return res.status(500).json({ error: err.message });
-      rows
-        .filter((attachment) => attachment.type === "file" && attachment.path)
-        .forEach((attachment) => {
-          fs.unlink(attachment.path, (unlinkErr) => {
-            if (unlinkErr && unlinkErr.code !== "ENOENT") {
-              console.error(`Failed to remove file ${attachment.path}`, unlinkErr);
-            }
-          });
+
+    const attachmentRows = await dbAll(
+      "SELECT * FROM attachments WHERE task_id = ?",
+      [id]
+    );
+
+    await dbRun("DELETE FROM tasks WHERE id = ? AND user_id = ?", [
+      id,
+      req.user.id,
+    ]);
+
+    attachmentRows
+      .filter((attachment) => attachment.type === "file" && attachment.path)
+      .forEach((attachment) => {
+        fs.unlink(attachment.path, (unlinkErr) => {
+          if (unlinkErr && unlinkErr.code !== "ENOENT") {
+            console.error(
+              `Failed to remove file ${attachment.path}`,
+              unlinkErr
+            );
+          }
         });
-      res.json({ message: "Task deleted" });
-    });
-  });
+      });
+
+    res.json({ message: "Task deleted" });
+  } catch (err) {
+    next(err);
+  }
 });
 
 // get attachments for a task
-app.get("/api/tasks/:id/attachments", (req, res) => {
+app.get("/api/tasks/:id/attachments", authenticate, async (req, res, next) => {
   const { id } = req.params;
-  db.all(
-    "SELECT * FROM attachments WHERE task_id = ? ORDER BY datetime(created_at) DESC",
-    [id],
-    (err, rows) => {
-      if (err) {
-        return res.status(500).json({ error: err.message });
-      }
-      res.json(rows.map((row) => formatAttachment(row, req)));
+  try {
+    const taskRow = await ensureTaskOwnership(id, req.user.id);
+    if (!taskRow) {
+      return res.status(404).json({ error: "Task not found" });
     }
-  );
+    const rows = await dbAll(
+      "SELECT * FROM attachments WHERE task_id = ? ORDER BY datetime(created_at) DESC",
+      [id]
+    );
+    res.json(rows.map((row) => formatAttachment(row, req)));
+  } catch (err) {
+    next(err);
+  }
 });
 
 // upload a file attachment
 app.post(
   "/api/tasks/:id/attachments/upload",
+  authenticate,
   upload.single("file"),
-  (req, res) => {
+  async (req, res, next) => {
     const { id } = req.params;
-    if (!req.file) {
-      return res.status(400).json({ error: "No file uploaded" });
-    }
-
-    db.get("SELECT id FROM tasks WHERE id = ?", [id], (taskErr, taskRow) => {
-      if (taskErr) {
-        return res.status(500).json({ error: taskErr.message });
-      }
+    try {
+      const taskRow = await ensureTaskOwnership(id, req.user.id);
       if (!taskRow) {
+        if (req.file?.path) {
+          fs.unlink(req.file.path, () => {});
+        }
         return res.status(404).json({ error: "Task not found" });
+      }
+
+      if (!req.file) {
+        return res.status(400).json({ error: "No file uploaded" });
       }
 
       const attachmentId = uuidv4();
       const publicPath = `/uploads/${path.basename(req.file.path)}`;
 
-      db.run(
+      await dbRun(
         `
         INSERT INTO attachments (id, task_id, type, name, url, mime_type, size, path)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -268,120 +473,116 @@ app.post(
           req.file.mimetype,
           req.file.size,
           req.file.path,
-        ],
-        (insertErr) => {
-          if (insertErr) {
-            return res.status(500).json({ error: insertErr.message });
-          }
-          db.get(
-            "SELECT * FROM attachments WHERE id = ?",
-            [attachmentId],
-            (selectErr, row) => {
-              if (selectErr) {
-                return res.status(500).json({ error: selectErr.message });
-              }
-              res.status(201).json(formatAttachment(row, req));
-            }
-          );
-        }
+        ]
       );
-    });
+
+      const row = await dbGet("SELECT * FROM attachments WHERE id = ?", [
+        attachmentId,
+      ]);
+      res.status(201).json(formatAttachment(row, req));
+    } catch (err) {
+      if (req.file?.path) {
+        fs.unlink(req.file.path, () => {});
+      }
+      next(err);
+    }
   }
 );
 
 // add a link attachment
-app.post("/api/tasks/:id/attachments/link", (req, res) => {
+app.post("/api/tasks/:id/attachments/link", authenticate, async (req, res, next) => {
   const { id } = req.params;
   const { url, name } = req.body || {};
 
-  if (!url) {
+  const trimmedUrl = typeof url === "string" ? url.trim() : "";
+  if (!trimmedUrl) {
     return res.status(400).json({ error: "URL is required" });
   }
+  const displayName =
+    typeof name === "string" && name.trim() ? name.trim() : trimmedUrl;
 
-  db.get("SELECT id FROM tasks WHERE id = ?", [id], (taskErr, taskRow) => {
-    if (taskErr) {
-      return res.status(500).json({ error: taskErr.message });
-    }
+  try {
+    const taskRow = await ensureTaskOwnership(id, req.user.id);
     if (!taskRow) {
       return res.status(404).json({ error: "Task not found" });
     }
 
     const attachmentId = uuidv4();
-    db.run(
+    await dbRun(
       `
       INSERT INTO attachments (id, task_id, type, name, url, mime_type, size, path)
       VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL)
     `,
-      [attachmentId, id, "link", name || url, url],
-      (insertErr) => {
-        if (insertErr) {
-          return res.status(500).json({ error: insertErr.message });
-        }
-        db.get(
-          "SELECT * FROM attachments WHERE id = ?",
-          [attachmentId],
-          (selectErr, row) => {
-            if (selectErr) {
-              return res.status(500).json({ error: selectErr.message });
-            }
-            res.status(201).json(formatAttachment(row, req));
-          }
-        );
-      }
+      [attachmentId, id, "link", displayName, trimmedUrl]
     );
-  });
+
+    const row = await dbGet("SELECT * FROM attachments WHERE id = ?", [
+      attachmentId,
+    ]);
+    res.status(201).json(formatAttachment(row, req));
+  } catch (err) {
+    next(err);
+  }
 });
 
 // delete an attachment
-app.delete("/api/attachments/:attachmentId", (req, res) => {
-  const { attachmentId } = req.params;
-  db.get(
-    "SELECT * FROM attachments WHERE id = ?",
-    [attachmentId],
-    (selectErr, row) => {
-      if (selectErr) {
-        return res.status(500).json({ error: selectErr.message });
-      }
-      if (!row) {
+app.delete(
+  "/api/attachments/:attachmentId",
+  authenticate,
+  async (req, res, next) => {
+    const { attachmentId } = req.params;
+    try {
+      const row = await dbGet(
+        `
+        SELECT a.*, t.user_id AS owner_id
+        FROM attachments a
+        INNER JOIN tasks t ON a.task_id = t.id
+        WHERE a.id = ?
+      `,
+        [attachmentId]
+      );
+
+      if (!row || row.owner_id !== req.user.id) {
         return res.status(404).json({ error: "Attachment not found" });
       }
 
-      db.run("DELETE FROM attachments WHERE id = ?", [attachmentId], (err) => {
-        if (err) {
-          return res.status(500).json({ error: err.message });
-        }
+      await dbRun("DELETE FROM attachments WHERE id = ?", [attachmentId]);
 
-        if (row.type === "file" && row.path) {
-          fs.unlink(row.path, (unlinkErr) => {
-            if (unlinkErr && unlinkErr.code !== "ENOENT") {
-              console.error(`Failed to remove file ${row.path}`, unlinkErr);
-            }
-          });
-        }
+      if (row.type === "file" && row.path) {
+        fs.unlink(row.path, (unlinkErr) => {
+          if (unlinkErr && unlinkErr.code !== "ENOENT") {
+            console.error(`Failed to remove file ${row.path}`, unlinkErr);
+          }
+        });
+      }
 
-        res.json({ message: "Attachment deleted" });
-      });
+      res.json({ message: "Attachment deleted" });
+    } catch (err) {
+      next(err);
     }
-  );
-});
+  }
+);
 
 // get tags for a task
-app.get("/api/tasks/:id/tags", (req, res) => {
+app.get("/api/tasks/:id/tags", authenticate, async (req, res, next) => {
   const { id } = req.params;
-  db.all(
-    "SELECT * FROM tags WHERE task_id = ? ORDER BY datetime(created_at) DESC",
-    [id],
-    (err, rows) => {
-      if (err) {
-        return res.status(500).json({ error: err.message });
-      }
-      res.json(rows.map((row) => formatTag(row)));
+  try {
+    const taskRow = await ensureTaskOwnership(id, req.user.id);
+    if (!taskRow) {
+      return res.status(404).json({ error: "Task not found" });
     }
-  );
+    const rows = await dbAll(
+      "SELECT * FROM tags WHERE task_id = ? ORDER BY datetime(created_at) DESC",
+      [id]
+    );
+    res.json(rows.map((row) => formatTag(row)));
+  } catch (err) {
+    next(err);
+  }
 });
 
 // create a tag for a task
-app.post("/api/tasks/:id/tags", (req, res) => {
+app.post("/api/tasks/:id/tags", authenticate, async (req, res, next) => {
   const { id } = req.params;
   const { label, color } = req.body || {};
 
@@ -392,38 +593,29 @@ app.post("/api/tasks/:id/tags", (req, res) => {
   const normalizedColor =
     typeof color === "string" && color.trim() ? color.trim() : "#1976d2";
 
-  db.get("SELECT id FROM tasks WHERE id = ?", [id], (taskErr, taskRow) => {
-    if (taskErr) {
-      return res.status(500).json({ error: taskErr.message });
-    }
+  try {
+    const taskRow = await ensureTaskOwnership(id, req.user.id);
     if (!taskRow) {
       return res.status(404).json({ error: "Task not found" });
     }
 
     const tagId = uuidv4();
-    db.run(
+    await dbRun(
       `
       INSERT INTO tags (id, task_id, label, color)
       VALUES (?, ?, ?, ?)
     `,
-      [tagId, id, trimmedLabel, normalizedColor],
-      (insertErr) => {
-        if (insertErr) {
-          return res.status(500).json({ error: insertErr.message });
-        }
-        db.get("SELECT * FROM tags WHERE id = ?", [tagId], (selectErr, row) => {
-          if (selectErr) {
-            return res.status(500).json({ error: selectErr.message });
-          }
-          res.status(201).json(formatTag(row));
-        });
-      }
+      [tagId, id, trimmedLabel, normalizedColor]
     );
-  });
+    const row = await dbGet("SELECT * FROM tags WHERE id = ?", [tagId]);
+    res.status(201).json(formatTag(row));
+  } catch (err) {
+    next(err);
+  }
 });
 
 // update a tag
-app.put("/api/tags/:tagId", (req, res) => {
+app.put("/api/tags/:tagId", authenticate, async (req, res, next) => {
   const { tagId } = req.params;
   const { label, color } = req.body || {};
 
@@ -449,42 +641,64 @@ app.put("/api/tags/:tagId", (req, res) => {
     return res.status(400).json({ error: "No fields provided to update" });
   }
 
-  values.push(tagId);
+  try {
+    const tagRow = await dbGet(
+      `
+      SELECT tg.*
+      FROM tags tg
+      INNER JOIN tasks t ON tg.task_id = t.id
+      WHERE tg.id = ? AND t.user_id = ?
+    `,
+      [tagId, req.user.id]
+    );
 
-  db.run(`UPDATE tags SET ${updates.join(", ")} WHERE id = ?`, values, (err) => {
-    if (err) {
-      return res.status(500).json({ error: err.message });
-    }
-    db.get("SELECT * FROM tags WHERE id = ?", [tagId], (selectErr, row) => {
-      if (selectErr) {
-        return res.status(500).json({ error: selectErr.message });
-      }
-      if (!row) {
-        return res.status(404).json({ error: "Tag not found" });
-      }
-      res.json(formatTag(row));
-    });
-  });
-});
-
-// delete a tag
-app.delete("/api/tags/:tagId", (req, res) => {
-  const { tagId } = req.params;
-  db.get("SELECT * FROM tags WHERE id = ?", [tagId], (selectErr, row) => {
-    if (selectErr) {
-      return res.status(500).json({ error: selectErr.message });
-    }
-    if (!row) {
+    if (!tagRow) {
       return res.status(404).json({ error: "Tag not found" });
     }
 
-    db.run("DELETE FROM tags WHERE id = ?", [tagId], (err) => {
-      if (err) {
-        return res.status(500).json({ error: err.message });
-      }
-      res.json({ message: "Tag deleted" });
-    });
-  });
+    await dbRun(`UPDATE tags SET ${updates.join(", ")} WHERE id = ?`, [
+      ...values,
+      tagId,
+    ]);
+
+    const updatedRow = await dbGet("SELECT * FROM tags WHERE id = ?", [tagId]);
+    res.json(formatTag(updatedRow));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// delete a tag
+app.delete("/api/tags/:tagId", authenticate, async (req, res, next) => {
+  const { tagId } = req.params;
+  try {
+    const row = await dbGet(
+      `
+      SELECT tg.*, t.user_id AS owner_id
+      FROM tags tg
+      INNER JOIN tasks t ON tg.task_id = t.id
+      WHERE tg.id = ?
+    `,
+      [tagId]
+    );
+
+    if (!row || row.owner_id !== req.user.id) {
+      return res.status(404).json({ error: "Tag not found" });
+    }
+
+    await dbRun("DELETE FROM tags WHERE id = ?", [tagId]);
+    res.json({ message: "Tag deleted" });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.use((err, _req, res, _next) => {
+  console.error(err);
+  if (res.headersSent) {
+    return;
+  }
+  res.status(500).json({ error: "Internal server error" });
 });
 
 app.listen(5050, () => console.log("Backend running on http://localhost:5050"));
