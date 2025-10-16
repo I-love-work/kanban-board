@@ -1,24 +1,23 @@
-import axios from "axios";
+import client, { API_ORIGIN, API_URL } from "./client";
 
-export const API_URL = "http://localhost:5050/api";
-export const API_ORIGIN = API_URL.replace(/\/api$/, "");
+export { API_URL, API_ORIGIN };
 
-export const getTasks = async () => (await axios.get(`${API_URL}/tasks`)).data;
+export const getTasks = async () => (await client.get("/tasks")).data;
 
 export const createTask = async (task) =>
-  (await axios.post(`${API_URL}/tasks`, task)).data;
+  (await client.post("/tasks", task)).data;
 
 export const updateTask = async (id, data) =>
-  (await axios.put(`${API_URL}/tasks/${id}`, data)).data;
+  (await client.put(`/tasks/${id}`, data)).data;
 
 export const deleteTask = async (id) =>
-  (await axios.delete(`${API_URL}/tasks/${id}`)).data;
+  (await client.delete(`/tasks/${id}`)).data;
 
 export const uploadAttachment = async (taskId, file) => {
   const formData = new FormData();
   formData.append("file", file);
-  const response = await axios.post(
-    `${API_URL}/tasks/${taskId}/attachments/upload`,
+  const response = await client.post(
+    `/tasks/${taskId}/attachments/upload`,
     formData,
     {
       headers: { "Content-Type": "multipart/form-data" },
@@ -28,16 +27,16 @@ export const uploadAttachment = async (taskId, file) => {
 };
 
 export const createLinkAttachment = async (taskId, data) =>
-  (await axios.post(`${API_URL}/tasks/${taskId}/attachments/link`, data)).data;
+  (await client.post(`/tasks/${taskId}/attachments/link`, data)).data;
 
 export const deleteAttachment = async (attachmentId) =>
-  (await axios.delete(`${API_URL}/attachments/${attachmentId}`)).data;
+  (await client.delete(`/attachments/${attachmentId}`)).data;
 
 export const createTag = async (taskId, data) =>
-  (await axios.post(`${API_URL}/tasks/${taskId}/tags`, data)).data;
+  (await client.post(`/tasks/${taskId}/tags`, data)).data;
 
 export const updateTag = async (tagId, data) =>
-  (await axios.put(`${API_URL}/tags/${tagId}`, data)).data;
+  (await client.put(`/tags/${tagId}`, data)).data;
 
 export const deleteTag = async (tagId) =>
-  (await axios.delete(`${API_URL}/tags/${tagId}`)).data;
+  (await client.delete(`/tags/${tagId}`)).data;
