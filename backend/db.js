@@ -17,6 +17,20 @@ const ensureTaskUserIndex = () => {
   );
 };
 
+const ensureTaskBoardIndex = () => {
+  db.run(
+    "CREATE INDEX IF NOT EXISTS idx_tasks_board_id ON tasks(board_id)",
+    (err) => {
+      if (err) {
+        if (err.message && err.message.includes("no such column: board_id")) {
+          return;
+        }
+        console.error("Failed to create idx_tasks_board_id index:", err);
+      }
+    }
+  );
+};
+
 db.serialize(() => {
   db.run("PRAGMA foreign_keys = ON");
 
@@ -31,13 +45,29 @@ db.serialize(() => {
   `);
 
   db.run(`
+    CREATE TABLE IF NOT EXISTS boards (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      created_at TEXT DEFAULT (datetime('now')),
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    )
+  `);
+
+  db.run(
+    "CREATE INDEX IF NOT EXISTS idx_boards_user_id ON boards(user_id)"
+  );
+
+  db.run(`
     CREATE TABLE IF NOT EXISTS tasks (
       id TEXT PRIMARY KEY,
       user_id TEXT,
+      board_id TEXT,
       title TEXT NOT NULL,
       description TEXT DEFAULT '',
       status TEXT NOT NULL,
-      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      FOREIGN KEY (board_id) REFERENCES boards(id) ON DELETE CASCADE
     )
   `);
 
@@ -50,6 +80,7 @@ db.serialize(() => {
       (column) => column.name === "description"
     );
     const hasUserId = columns.some((column) => column.name === "user_id");
+    const hasBoardId = columns.some((column) => column.name === "board_id");
     if (!hasDescription) {
       db.run(
         "ALTER TABLE tasks ADD COLUMN description TEXT DEFAULT ''",
@@ -70,6 +101,17 @@ db.serialize(() => {
       });
     } else {
       ensureTaskUserIndex();
+    }
+    if (!hasBoardId) {
+      db.run("ALTER TABLE tasks ADD COLUMN board_id TEXT", (alterErr) => {
+        if (alterErr) {
+          console.error("Failed to add board_id column:", alterErr);
+        } else {
+          ensureTaskBoardIndex();
+        }
+      });
+    } else {
+      ensureTaskBoardIndex();
     }
   });
 

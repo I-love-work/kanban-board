@@ -102,6 +102,56 @@ const authenticate = async (req, res, next) => {
 const ensureTaskOwnership = async (taskId, userId) =>
   dbGet("SELECT * FROM tasks WHERE id = ? AND user_id = ?", [taskId, userId]);
 
+const ensureBoardOwnership = async (boardId, userId) =>
+  dbGet("SELECT * FROM boards WHERE id = ? AND user_id = ?", [boardId, userId]);
+
+const formatBoard = (row) =>
+  row
+    ? {
+        id: row.id,
+        userId: row.user_id,
+        name: row.name,
+        createdAt: row.created_at || row.createdAt || null,
+      }
+    : null;
+
+const ensureDefaultBoardForUser = async (userId) => {
+  let boardRow = await dbGet(
+    `
+      SELECT id, user_id, name, created_at
+      FROM boards
+      WHERE user_id = ?
+      ORDER BY datetime(created_at) ASC
+      LIMIT 1
+    `,
+    [userId]
+  );
+
+  if (!boardRow) {
+    const boardId = uuidv4();
+    await dbRun(
+      "INSERT INTO boards (id, user_id, name) VALUES (?, ?, ?)",
+      [boardId, userId, "My Board"]
+    );
+    boardRow = await dbGet(
+      "SELECT id, user_id, name, created_at FROM boards WHERE id = ?",
+      [boardId]
+    );
+  }
+
+  await dbRun(
+    `
+      UPDATE tasks
+      SET board_id = ?
+      WHERE user_id = ?
+        AND (board_id IS NULL OR board_id = '')
+    `,
+    [boardRow.id, userId]
+  );
+
+  return boardRow;
+};
+
 app.use(
   cors({
     origin: "*",
@@ -157,7 +207,11 @@ const mergeTaskRelations = (tasks, attachments, tags, req) => {
   }, new Map());
 
   return tasks.map((task) => ({
-    ...task,
+    id: task.id,
+    userId: task.user_id,
+    boardId: task.board_id,
+    title: task.title,
+    status: task.status,
     description: task.description || "",
     attachments: attachmentMap.get(task.id) || [],
     tags: tagMap.get(task.id) || [],
@@ -204,6 +258,8 @@ app.post("/api/auth/register", async (req, res, next) => {
       [userId]
     );
 
+    await ensureDefaultBoardForUser(userId);
+
     const token = generateToken(userRow);
     res.status(201).json({ user: sanitizeUser(userRow), token });
   } catch (err) {
@@ -248,30 +304,116 @@ app.get("/api/auth/me", authenticate, (req, res) => {
   res.json({ user: req.user });
 });
 
+app.get("/api/boards", authenticate, async (req, res, next) => {
+  try {
+    await ensureDefaultBoardForUser(req.user.id);
+    const boards = await dbAll(
+      `
+        SELECT b.id,
+               b.user_id,
+               b.name,
+               b.created_at,
+               COALESCE(tc.total, 0) AS task_count
+        FROM boards b
+        LEFT JOIN (
+          SELECT board_id, COUNT(*) AS total
+          FROM tasks
+          WHERE user_id = ?
+          GROUP BY board_id
+        ) tc ON tc.board_id = b.id
+        WHERE b.user_id = ?
+        ORDER BY datetime(b.created_at) ASC
+      `,
+      [req.user.id, req.user.id]
+    );
+    res.json(
+      boards.map((row) => ({
+        ...formatBoard(row),
+        taskCount: row.task_count || 0,
+      }))
+    );
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.post("/api/boards", authenticate, async (req, res, next) => {
+  try {
+    const rawName =
+      typeof req.body.name === "string" ? req.body.name.trim() : "";
+    if (!rawName) {
+      return res.status(400).json({ error: "Name is required" });
+    }
+    const boardId = uuidv4();
+    await dbRun(
+      "INSERT INTO boards (id, user_id, name) VALUES (?, ?, ?)",
+      [boardId, req.user.id, rawName]
+    );
+    const boardRow = await dbGet(
+      "SELECT id, user_id, name, created_at FROM boards WHERE id = ?",
+      [boardId]
+    );
+    res.status(201).json(formatBoard(boardRow));
+  } catch (err) {
+    if (err?.code === "SQLITE_CONSTRAINT") {
+      return res.status(400).json({ error: "Unable to create board" });
+    }
+    next(err);
+  }
+});
+
+app.get("/api/boards/:boardId", authenticate, async (req, res, next) => {
+  try {
+    const { boardId } = req.params;
+    const boardRow = await ensureBoardOwnership(boardId, req.user.id);
+    if (!boardRow) {
+      return res.status(404).json({ error: "Board not found" });
+    }
+    res.json(formatBoard(boardRow));
+  } catch (err) {
+    next(err);
+  }
+});
+
 // get all tasks
 app.get("/api/tasks", authenticate, async (req, res, next) => {
   try {
+    await ensureDefaultBoardForUser(req.user.id);
+    const boardId =
+      typeof req.query.boardId === "string" ? req.query.boardId.trim() : "";
+    if (!boardId) {
+      return res.status(400).json({ error: "boardId is required" });
+    }
+    const boardRow = await ensureBoardOwnership(boardId, req.user.id);
+    if (!boardRow) {
+      return res.status(404).json({ error: "Board not found" });
+    }
     const tasks = await dbAll(
-      "SELECT * FROM tasks WHERE user_id = ? ORDER BY rowid ASC",
-      [req.user.id]
+      `
+        SELECT *
+        FROM tasks
+        WHERE user_id = ? AND board_id = ?
+        ORDER BY rowid ASC
+      `,
+      [req.user.id, boardId]
     );
     const attachments = await dbAll(
       `
       SELECT a.*
       FROM attachments a
       INNER JOIN tasks t ON a.task_id = t.id
-      WHERE t.user_id = ?
+      WHERE t.user_id = ? AND t.board_id = ?
     `,
-      [req.user.id]
+      [req.user.id, boardId]
     );
     const tags = await dbAll(
       `
       SELECT tg.*
       FROM tags tg
       INNER JOIN tasks t ON tg.task_id = t.id
-      WHERE t.user_id = ?
+      WHERE t.user_id = ? AND t.board_id = ?
     `,
-      [req.user.id]
+      [req.user.id, boardId]
     );
     res.json(mergeTaskRelations(tasks, attachments, tags, req));
   } catch (err) {
@@ -282,10 +424,22 @@ app.get("/api/tasks", authenticate, async (req, res, next) => {
 // create a new task
 app.post("/api/tasks", authenticate, async (req, res, next) => {
   try {
-    const { title, status, description } = req.body || {};
+    const { title, status, description, boardId } = req.body || {};
     const trimmedTitle = typeof title === "string" ? title.trim() : "";
     if (!trimmedTitle) {
       return res.status(400).json({ error: "Title is required" });
+    }
+    const normalizedBoardId =
+      typeof boardId === "string" && boardId.trim() ? boardId.trim() : "";
+    if (!normalizedBoardId) {
+      return res.status(400).json({ error: "boardId is required" });
+    }
+    const boardRow = await ensureBoardOwnership(
+      normalizedBoardId,
+      req.user.id
+    );
+    if (!boardRow) {
+      return res.status(404).json({ error: "Board not found" });
     }
     const normalizedStatus =
       typeof status === "string" && status.trim() ? status.trim() : "todo";
@@ -293,11 +447,22 @@ app.post("/api/tasks", authenticate, async (req, res, next) => {
       typeof description === "string" ? description : "";
     const id = uuidv4();
     await dbRun(
-      "INSERT INTO tasks (id, user_id, title, description, status) VALUES (?, ?, ?, ?, ?)",
-      [id, req.user.id, trimmedTitle, descriptionText, normalizedStatus]
+      `
+        INSERT INTO tasks (id, user_id, board_id, title, description, status)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `,
+      [
+        id,
+        req.user.id,
+        normalizedBoardId,
+        trimmedTitle,
+        descriptionText,
+        normalizedStatus,
+      ]
     );
     res.status(201).json({
       id,
+      boardId: normalizedBoardId,
       title: trimmedTitle,
       description: descriptionText,
       status: normalizedStatus,
@@ -312,10 +477,11 @@ app.post("/api/tasks", authenticate, async (req, res, next) => {
 // update a task
 app.put("/api/tasks/:id", authenticate, async (req, res, next) => {
   const { id } = req.params;
-  const { title, status, description } = req.body || {};
+  const { title, status, description, boardId } = req.body || {};
 
   const updates = [];
   const values = [];
+  let validatedBoardId = null;
 
   if (title !== undefined) {
     const trimmedTitle = typeof title === "string" ? title.trim() : "";
@@ -341,6 +507,24 @@ app.put("/api/tasks/:id", authenticate, async (req, res, next) => {
     }
     updates.push("status = ?");
     values.push(normalizedStatus);
+  }
+
+  if (boardId !== undefined) {
+    const normalizedBoardId =
+      typeof boardId === "string" && boardId.trim() ? boardId.trim() : "";
+    if (!normalizedBoardId) {
+      return res.status(400).json({ error: "boardId cannot be empty" });
+    }
+    const boardRow = await ensureBoardOwnership(
+      normalizedBoardId,
+      req.user.id
+    );
+    if (!boardRow) {
+      return res.status(404).json({ error: "Board not found" });
+    }
+    validatedBoardId = normalizedBoardId;
+    updates.push("board_id = ?");
+    values.push(normalizedBoardId);
   }
 
   if (!updates.length) {
@@ -370,8 +554,12 @@ app.put("/api/tasks/:id", authenticate, async (req, res, next) => {
     const tagRows = await dbAll("SELECT * FROM tags WHERE task_id = ?", [id]);
 
     res.json({
-      ...taskRow,
+      id: taskRow.id,
+      userId: taskRow.user_id,
+      boardId: taskRow.board_id || validatedBoardId,
+      title: taskRow.title,
       description: taskRow.description || "",
+      status: taskRow.status,
       attachments: attachmentRows.map((row) => formatAttachment(row, req)),
       tags: tagRows.map((row) => formatTag(row)),
     });

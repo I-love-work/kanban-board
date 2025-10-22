@@ -14,8 +14,16 @@ import {
   deleteTag as removeTagApi,
 } from "../api/taskApi";
 
-export default function Board({ columns, setColumns, onAuthError }) {
+export default function Board({
+  boardId,
+  boardName,
+  onAuthError,
+  onTaskCountChange,
+}) {
+  const [columns, setColumns] = useState(() => createInitialColumns());
   const [newTaskTitle, setNewTaskTitle] = useState("");
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
 
   const handleApiError = useCallback(
     (err, context) => {
@@ -44,53 +52,76 @@ export default function Board({ columns, setColumns, onAuthError }) {
   };
 
   useEffect(() => {
-    async function fetchTasks() {
+    let cancelled = false;
+
+    const loadTasks = async () => {
+      setIsLoading(true);
+      setLoadError("");
       try {
-        const data = await getTasks();
+        if (!boardId) {
+          setColumns(createInitialColumns());
+          return;
+        }
+        const data = await getTasks(boardId);
+        if (cancelled) {
+          return;
+        }
         const normalizeTask = (task) => ({
           ...task,
           description: task.description || "",
-          attachments: Array.isArray(task.attachments) ? task.attachments : [],
+          attachments: Array.isArray(task.attachments)
+            ? task.attachments
+            : [],
           tags: Array.isArray(task.tags) ? task.tags : [],
         });
-        const grouped = {
-          todo: {
-            id: "todo",
-            name: "To Do",
-            tasks: data
-              .filter((t) => t.status === "todo")
-              .map(normalizeTask),
-          },
-          inprogress: {
-            id: "inprogress",
-            name: "In Progress",
-            tasks: data
-              .filter((t) => t.status === "inprogress")
-              .map(normalizeTask),
-          },
-          done: {
-            id: "done",
-            name: "Done",
-            tasks: data
-              .filter((t) => t.status === "done")
-              .map(normalizeTask),
-          },
-        };
+        const grouped = createInitialColumns();
+        data.forEach((task) => {
+          const key = grouped[task.status] ? task.status : "todo";
+          const updatedTasks = [
+            ...grouped[key].tasks,
+            normalizeTask(task),
+          ];
+          grouped[key] = { ...grouped[key], tasks: updatedTasks };
+        });
         setColumns(grouped);
       } catch (err) {
+        if (!cancelled) {
+          setLoadError("Failed to load tasks for this board.");
+        }
         handleApiError(err, "Failed to load tasks");
+      } finally {
+        if (!cancelled) {
+          setIsLoading(false);
+        }
       }
+    };
+
+    setColumns(createInitialColumns());
+    loadTasks();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [boardId, handleApiError]);
+
+  useEffect(() => {
+    if (typeof onTaskCountChange !== "function" || !boardId) {
+      return;
     }
-    fetchTasks();
-  }, [setColumns, handleApiError]);
+    const total = Object.values(columns).reduce(
+      (sum, column) => sum + column.tasks.length,
+      0
+    );
+    onTaskCountChange(boardId, total);
+  }, [boardId, columns, onTaskCountChange]);
 
   // Add new task to "To Do" column
   const handleAddTask = async () => {
     const title = newTaskTitle.trim();
-    if (!title) return;
+    if (!title || !boardId) return;
 
     try {
-      const newTask = await createTask({
+      const newTask = await createTask(boardId, {
         title,
         description: "",
         status: "todo",
@@ -326,6 +357,26 @@ export default function Board({ columns, setColumns, onAuthError }) {
       <div
         style={{
           display: "flex",
+          justifyContent: "space-between",
+          alignItems: "flex-start",
+          flexWrap: "wrap",
+          gap: 12,
+          marginTop: 12,
+        }}
+      >
+        <div>
+          <h2 style={{ margin: "0 0 4px 0" }}>
+            {boardName || "Untitled board"}
+          </h2>
+          <p style={{ margin: 0, color: "#6b7280", fontSize: 14 }}>
+            Drag tasks between columns to keep work moving.
+          </p>
+        </div>
+      </div>
+
+      <div
+        style={{
+          display: "flex",
           justifyContent: "center",
           alignItems: "center",
           gap: 8,
@@ -337,27 +388,68 @@ export default function Board({ columns, setColumns, onAuthError }) {
           value={newTaskTitle}
           onChange={(e) => setNewTaskTitle(e.target.value)}
           placeholder="Enter new task..."
+          disabled={isLoading}
           style={{
             width: "300px",
             padding: "8px",
             borderRadius: "6px",
             border: "1px solid #ccc",
+            opacity: isLoading ? 0.6 : 1,
+            cursor: isLoading ? "not-allowed" : "text",
           }}
         />
         <button
           onClick={handleAddTask}
+          disabled={!newTaskTitle.trim() || !boardId || isLoading}
           style={{
             padding: "8px 14px",
             border: "none",
             borderRadius: "6px",
             backgroundColor: "#1976d2",
             color: "white",
-            cursor: "pointer",
+            cursor:
+              !newTaskTitle.trim() || !boardId || isLoading
+                ? "not-allowed"
+                : "pointer",
+            opacity:
+              !newTaskTitle.trim() || !boardId || isLoading ? 0.6 : 1,
+            transition: "opacity 0.2s ease",
           }}
         >
           Add Task
         </button>
       </div>
+
+      {loadError ? (
+        <div
+          style={{
+            maxWidth: 480,
+            margin: "20px auto 0",
+            background: "#fee2e2",
+            color: "#b91c1c",
+            padding: "12px 16px",
+            borderRadius: 8,
+            border: "1px solid #fecaca",
+            textAlign: "center",
+          }}
+        >
+          {loadError}
+        </div>
+      ) : null}
+
+      {isLoading ? (
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "center",
+            marginTop: 18,
+            color: "#6b7280",
+            fontSize: 15,
+          }}
+        >
+          Loading tasks...
+        </div>
+      ) : null}
 
       <DragDropContext onDragEnd={onDragEnd}>
         <div
@@ -391,3 +483,21 @@ export default function Board({ columns, setColumns, onAuthError }) {
     </>
   );
 }
+
+const createInitialColumns = () => ({
+  todo: {
+    id: "todo",
+    name: "To Do",
+    tasks: [],
+  },
+  inprogress: {
+    id: "inprogress",
+    name: "In Progress",
+    tasks: [],
+  },
+  done: {
+    id: "done",
+    name: "Done",
+    tasks: [],
+  },
+});

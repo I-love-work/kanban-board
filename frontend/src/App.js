@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   BrowserRouter,
   Navigate,
@@ -6,10 +6,12 @@ import {
   Routes,
   useLocation,
   useNavigate,
+  useParams,
 } from "react-router-dom";
 import Board from "./components/Board";
 import AuthForm from "./components/AuthForm";
 import ProfilePage from "./components/ProfilePage";
+import BoardList from "./components/BoardList";
 import {
   clearAuth,
   fetchCurrentUser,
@@ -18,27 +20,9 @@ import {
   register,
 } from "./api/authApi";
 import { getStoredToken } from "./api/client";
-
-const initialColumns = {
-  todo: {
-    id: "todo",
-    name: "To Do",
-    tasks: [],
-  },
-  inprogress: {
-    id: "inprogress",
-    name: "In Progress",
-    tasks: [],
-  },
-  done: {
-    id: "done",
-    name: "Done",
-    tasks: [],
-  },
-};
+import { createBoard, getBoard, getBoards } from "./api/boardApi";
 
 export default function App() {
-  const [columns, setColumns] = useState(initialColumns);
   const [user, setUser] = useState(null);
   const [checkingAuth, setCheckingAuth] = useState(true);
   const [authMode, setAuthMode] = useState("login");
@@ -63,12 +47,6 @@ export default function App() {
     }
     bootstrapAuth();
   }, []);
-
-  useEffect(() => {
-    if (!user) {
-      setColumns(initialColumns);
-    }
-  }, [user]);
 
   const handleAuthSubmit = async ({ email, password, name }) => {
     const trimmedEmail = (email || "").trim().toLowerCase();
@@ -147,8 +125,6 @@ export default function App() {
       ) : (
         <AuthenticatedApp
           user={user}
-          columns={columns}
-          setColumns={setColumns}
           onLogout={handleLogout}
           onAuthError={handleUnauthorized}
         />
@@ -174,18 +150,17 @@ function LoadingScreen() {
   );
 }
 
-function AuthenticatedApp({
-  user,
-  columns,
-  setColumns,
-  onLogout,
-  onAuthError,
-}) {
+function AuthenticatedApp({ user, onLogout, onAuthError }) {
   const navigate = useNavigate();
   const location = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
   const avatarButtonRef = useRef(null);
   const menuRef = useRef(null);
+  const [boards, setBoards] = useState([]);
+  const [boardsLoading, setBoardsLoading] = useState(true);
+  const [boardLoadError, setBoardLoadError] = useState("");
+  const [boardCreateError, setBoardCreateError] = useState("");
+  const [isCreatingBoard, setIsCreatingBoard] = useState(false);
 
   useEffect(() => {
     setMenuOpen(false);
@@ -207,6 +182,35 @@ function AuthenticatedApp({
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [menuOpen]);
 
+  useEffect(() => {
+    let cancelled = false;
+    async function fetchBoards() {
+      setBoardsLoading(true);
+      setBoardLoadError("");
+      try {
+        const list = await getBoards();
+        if (!cancelled) {
+          setBoards(Array.isArray(list) ? list : []);
+        }
+      } catch (err) {
+        if (cancelled) return;
+        if (err?.response?.status === 401) {
+          onAuthError();
+          return;
+        }
+        setBoardLoadError("Unable to load boards right now.");
+      } finally {
+        if (!cancelled) {
+          setBoardsLoading(false);
+        }
+      }
+    }
+    fetchBoards();
+    return () => {
+      cancelled = true;
+    };
+  }, [onAuthError]);
+
   const greeting = useMemo(() => {
     if (user.name) return `Hi, ${user.name}`;
     if (user.email) return user.email;
@@ -215,12 +219,71 @@ function AuthenticatedApp({
 
   const initials = useMemo(() => getUserInitials(user), [user]);
 
+  const refreshBoards = useCallback(async () => {
+    setBoardLoadError("");
+    setBoardsLoading(true);
+    try {
+      const list = await getBoards();
+      setBoards(Array.isArray(list) ? list : []);
+    } catch (err) {
+      if (err?.response?.status === 401) {
+        onAuthError();
+        return;
+      }
+      setBoardLoadError("Unable to load boards right now.");
+    } finally {
+      setBoardsLoading(false);
+    }
+  }, [onAuthError]);
+
+  const handleCreateBoard = useCallback(
+    async (name) => {
+      const trimmedName = typeof name === "string" ? name.trim() : "";
+      if (!trimmedName) {
+        setBoardCreateError("Board name cannot be empty.");
+        return null;
+      }
+      setBoardCreateError("");
+      setIsCreatingBoard(true);
+      try {
+        const created = await createBoard({ name: trimmedName });
+        setBoards((prev) => [
+          ...prev,
+          { ...created, taskCount: created.taskCount || 0 },
+        ]);
+        navigate(`/boards/${created.id}`);
+        return created;
+      } catch (err) {
+        if (err?.response?.status === 401) {
+          onAuthError();
+          return null;
+        }
+        const message =
+          err?.response?.data?.error || "Unable to create board right now.";
+        setBoardCreateError(message);
+        return null;
+      } finally {
+        setIsCreatingBoard(false);
+      }
+    },
+    [navigate, onAuthError]
+  );
+
+  const handleTaskCountChange = useCallback((boardId, count) => {
+    setBoards((prev) =>
+      prev.map((board) =>
+        board.id === boardId ? { ...board, taskCount: count } : board
+      )
+    );
+  }, []);
+
   const handleNavigate = (path) => {
     navigate(path);
     setMenuOpen(false);
   };
 
-  const isBoardActive = location.pathname === "/";
+  const isBoardActive =
+    location.pathname === "/" || location.pathname.startsWith("/boards");
 
   return (
     <div style={{ minHeight: "100vh", background: "#f5f5f5" }}>
@@ -351,10 +414,26 @@ function AuthenticatedApp({
             <Route
               path="/"
               element={
-                <Board
-                  columns={columns}
-                  setColumns={setColumns}
+                <BoardList
+                  boards={boards}
+                  isLoading={boardsLoading}
+                  error={boardLoadError}
+                  onRetry={refreshBoards}
+                  onCreateBoard={handleCreateBoard}
+                  isCreating={isCreatingBoard}
+                  creationError={boardCreateError}
+                />
+              }
+            />
+            <Route
+              path="/boards/:boardId"
+              element={
+                <BoardPage
+                  boards={boards}
+                  boardsLoading={boardsLoading}
+                  setBoards={setBoards}
                   onAuthError={onAuthError}
+                  onTaskCountChange={handleTaskCountChange}
                 />
               }
             />
@@ -364,6 +443,145 @@ function AuthenticatedApp({
         </main>
       </div>
     </div>
+  );
+}
+
+function BoardPage({
+  boards,
+  boardsLoading,
+  setBoards,
+  onAuthError,
+  onTaskCountChange,
+}) {
+  const { boardId } = useParams();
+  const navigate = useNavigate();
+  const [fetchingBoard, setFetchingBoard] = useState(false);
+  const [boardError, setBoardError] = useState("");
+
+  const board = useMemo(
+    () => boards.find((item) => item.id === boardId),
+    [boards, boardId]
+  );
+
+  useEffect(() => {
+    if (board) {
+      setBoardError("");
+    }
+  }, [board]);
+
+  useEffect(() => {
+    if (!boardId || board || boardsLoading) {
+      return;
+    }
+
+    let cancelled = false;
+    setFetchingBoard(true);
+    setBoardError("");
+
+    async function loadBoard() {
+      try {
+        const fetched = await getBoard(boardId);
+        if (cancelled) {
+          return;
+        }
+        setBoards((prev) => {
+          if (prev.some((item) => item.id === fetched.id)) {
+            return prev;
+          }
+          return [...prev, { ...fetched, taskCount: fetched.taskCount || 0 }];
+        });
+      } catch (err) {
+        if (cancelled) {
+          return;
+        }
+        if (err?.response?.status === 401) {
+          onAuthError();
+          return;
+        }
+        if (err?.response?.status === 404) {
+          setBoardError("Board not found.");
+        } else {
+          setBoardError("Unable to open this board right now.");
+        }
+      } finally {
+        if (!cancelled) {
+          setFetchingBoard(false);
+        }
+      }
+    }
+
+    loadBoard();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [board, boardId, boardsLoading, onAuthError, setBoards]);
+
+  if (!boardId) {
+    return <Navigate to="/" replace />;
+  }
+
+  if (!board && (boardsLoading || fetchingBoard)) {
+    return (
+      <div
+        style={{
+          minHeight: 240,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          background: "#ffffff",
+          borderRadius: 12,
+          boxShadow: "0 10px 24px rgba(15,23,42,0.08)",
+        }}
+      >
+        <p style={{ color: "#6b7280", fontSize: 15 }}>Loading board...</p>
+      </div>
+    );
+  }
+
+  if (boardError) {
+    return (
+      <div
+        style={{
+          background: "#fff1f2",
+          borderRadius: 12,
+          padding: "24px 28px",
+          border: "1px solid #fecdd3",
+        }}
+      >
+        <h3 style={{ marginTop: 0, marginBottom: 12, color: "#be123c" }}>
+          {boardError}
+        </h3>
+        <button
+          type="button"
+          onClick={() => navigate("/")}
+          style={{
+            padding: "10px 18px",
+            borderRadius: 8,
+            border: "none",
+            background: "#be123c",
+            color: "#ffffff",
+            fontWeight: 600,
+            cursor: "pointer",
+          }}
+        >
+          Back to boards
+        </button>
+      </div>
+    );
+  }
+
+  if (!board) {
+    return null;
+  }
+
+  return (
+    <Board
+      boardId={board.id}
+      boardName={board.name}
+      onAuthError={onAuthError}
+      onTaskCountChange={onTaskCountChange}
+    />
   );
 }
 
