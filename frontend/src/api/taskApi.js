@@ -2,10 +2,20 @@ import client, { API_ORIGIN, API_URL } from "./client";
 
 export { API_URL, API_ORIGIN };
 
-export const getTasks = async () => (await client.get("/tasks")).data;
+export const getTasks = async (boardId) =>
+  (
+    await client.get("/tasks", {
+      params: { boardId },
+    })
+  ).data;
 
-export const createTask = async (task) =>
-  (await client.post("/tasks", task)).data;
+export const createTask = async (boardId, task) =>
+  (
+    await client.post("/tasks", {
+      ...task,
+      boardId,
+    })
+  ).data;
 
 export const updateTask = async (id, data) =>
   (await client.put(`/tasks/${id}`, data)).data;
