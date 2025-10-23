@@ -160,32 +160,44 @@ export default function BoardList({
             marginTop: 28,
           }}
         >
-          {boards.map((board) => (
-            <button
-              key={board.id}
-              type="button"
-              onClick={() => navigate(`/boards/${board.id}`)}
-              style={{
-                textAlign: "left",
-                background: "#f8fafc",
-                borderRadius: 12,
-                padding: "18px 20px",
-                border: "1px solid #e2e8f0",
-                cursor: "pointer",
-                transition: "transform 0.15s ease, box-shadow 0.15s ease",
-                boxShadow: "0 10px 20px rgba(15,23,42,0.08)",
-              }}
-            >
-              <h3 style={{ margin: "0 0 8px 0", fontSize: 18 }}>
-                {board.name || "Untitled board"}
-              </h3>
-              <p style={{ margin: 0, color: "#64748b", fontSize: 14 }}>
-                {board.taskCount === 1
-                  ? "1 task"
-                  : `${board.taskCount || 0} tasks`}
-              </p>
-            </button>
-          ))}
+          {boards.map((board) => {
+            const description =
+              typeof board.description === "string"
+                ? board.description.trim()
+                : "";
+            const displayDescription = description || "No description yet";
+            return (
+              <button
+                key={board.id}
+                type="button"
+                onClick={() => navigate(`/boards/${board.id}`)}
+                style={{
+                  textAlign: "left",
+                  background: "#f8fafc",
+                  borderRadius: 12,
+                  padding: "18px 20px",
+                  border: "1px solid #e2e8f0",
+                  cursor: "pointer",
+                  transition: "transform 0.15s ease, box-shadow 0.15s ease",
+                  boxShadow: "0 10px 20px rgba(15,23,42,0.08)",
+                }}
+              >
+                <h3 style={{ margin: "0 0 8px 0", fontSize: 18 }}>
+                  {board.name || "Untitled board"}
+                </h3>
+                <p
+                  style={{
+                    margin: 0,
+                    color: "#64748b",
+                    fontSize: 14,
+                    fontStyle: description ? "normal" : "italic",
+                  }}
+                >
+                  {displayDescription}
+                </p>
+              </button>
+            );
+          })}
         </div>
       ) : (
         <div
