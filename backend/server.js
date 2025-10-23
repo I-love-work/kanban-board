@@ -26,6 +26,10 @@ const storage = multer.diskStorage({
 
 const upload = multer({ storage });
 
+const DEFAULT_BOARD_DESCRIPTION = "";
+const LEGACY_DEFAULT_BOARD_DESCRIPTION =
+  "Drag tasks between columns to keep work moving.";
+
 const dbRun = (sql, params = []) =>
   new Promise((resolve, reject) => {
     db.run(sql, params, function (err) {
@@ -105,20 +109,28 @@ const ensureTaskOwnership = async (taskId, userId) =>
 const ensureBoardOwnership = async (boardId, userId) =>
   dbGet("SELECT * FROM boards WHERE id = ? AND user_id = ?", [boardId, userId]);
 
-const formatBoard = (row) =>
-  row
-    ? {
-        id: row.id,
-        userId: row.user_id,
-        name: row.name,
-        createdAt: row.created_at || row.createdAt || null,
-      }
-    : null;
+const formatBoard = (row) => {
+  if (!row) {
+    return null;
+  }
+  const rawDescription = row.description || "";
+  const normalizedDescription =
+    rawDescription.trim() === LEGACY_DEFAULT_BOARD_DESCRIPTION
+      ? ""
+      : rawDescription;
+  return {
+    id: row.id,
+    userId: row.user_id,
+    name: row.name,
+    description: normalizedDescription,
+    createdAt: row.created_at || row.createdAt || null,
+  };
+};
 
 const ensureDefaultBoardForUser = async (userId) => {
   let boardRow = await dbGet(
     `
-      SELECT id, user_id, name, created_at
+      SELECT id, user_id, name, description, created_at
       FROM boards
       WHERE user_id = ?
       ORDER BY datetime(created_at) ASC
@@ -130,11 +142,11 @@ const ensureDefaultBoardForUser = async (userId) => {
   if (!boardRow) {
     const boardId = uuidv4();
     await dbRun(
-      "INSERT INTO boards (id, user_id, name) VALUES (?, ?, ?)",
-      [boardId, userId, "My Board"]
+      "INSERT INTO boards (id, user_id, name, description) VALUES (?, ?, ?, ?)",
+      [boardId, userId, "My Board", DEFAULT_BOARD_DESCRIPTION]
     );
     boardRow = await dbGet(
-      "SELECT id, user_id, name, created_at FROM boards WHERE id = ?",
+      "SELECT id, user_id, name, description, created_at FROM boards WHERE id = ?",
       [boardId]
     );
   }
@@ -155,7 +167,7 @@ const ensureDefaultBoardForUser = async (userId) => {
 app.use(
   cors({
     origin: "*",
-    methods: ["GET", "POST", "PUT", "DELETE"],
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
@@ -312,6 +324,7 @@ app.get("/api/boards", authenticate, async (req, res, next) => {
         SELECT b.id,
                b.user_id,
                b.name,
+               b.description,
                b.created_at,
                COALESCE(tc.total, 0) AS task_count
         FROM boards b
@@ -344,13 +357,22 @@ app.post("/api/boards", authenticate, async (req, res, next) => {
     if (!rawName) {
       return res.status(400).json({ error: "Name is required" });
     }
+    const hasDescriptionField = Object.prototype.hasOwnProperty.call(
+      req.body || {},
+      "description"
+    );
+    const rawDescription = hasDescriptionField
+      ? typeof req.body.description === "string"
+        ? req.body.description.trim()
+        : ""
+      : DEFAULT_BOARD_DESCRIPTION;
     const boardId = uuidv4();
     await dbRun(
-      "INSERT INTO boards (id, user_id, name) VALUES (?, ?, ?)",
-      [boardId, req.user.id, rawName]
+      "INSERT INTO boards (id, user_id, name, description) VALUES (?, ?, ?, ?)",
+      [boardId, req.user.id, rawName, rawDescription]
     );
     const boardRow = await dbGet(
-      "SELECT id, user_id, name, created_at FROM boards WHERE id = ?",
+      "SELECT id, user_id, name, description, created_at FROM boards WHERE id = ?",
       [boardId]
     );
     res.status(201).json(formatBoard(boardRow));
@@ -371,6 +393,62 @@ app.get("/api/boards/:boardId", authenticate, async (req, res, next) => {
     }
     res.json(formatBoard(boardRow));
   } catch (err) {
+    next(err);
+  }
+});
+
+app.patch("/api/boards/:boardId", authenticate, async (req, res, next) => {
+  try {
+    const { boardId } = req.params;
+    const boardRow = await ensureBoardOwnership(boardId, req.user.id);
+    if (!boardRow) {
+      return res.status(404).json({ error: "Board not found" });
+    }
+
+    const updates = [];
+    const params = [];
+    const body = req.body || {};
+
+    if (Object.prototype.hasOwnProperty.call(body, "name")) {
+      if (typeof body.name !== "string") {
+        return res.status(400).json({ error: "Name must be a string" });
+      }
+      const trimmedName = body.name.trim();
+      if (!trimmedName) {
+        return res.status(400).json({ error: "Name cannot be empty" });
+      }
+      updates.push("name = ?");
+      params.push(trimmedName);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(body, "description")) {
+      if (typeof body.description !== "string") {
+        return res.status(400).json({ error: "Description must be a string" });
+      }
+      const trimmedDescription = body.description.trim();
+      updates.push("description = ?");
+      params.push(trimmedDescription);
+    }
+
+    if (!updates.length) {
+      return res.status(400).json({ error: "No updates provided" });
+    }
+
+    await dbRun(
+      `UPDATE boards SET ${updates.join(", ")} WHERE id = ?`,
+      [...params, boardId]
+    );
+
+    const updatedRow = await dbGet(
+      "SELECT id, user_id, name, description, created_at FROM boards WHERE id = ?",
+      [boardId]
+    );
+
+    res.json(formatBoard(updatedRow));
+  } catch (err) {
+    if (err?.code === "SQLITE_CONSTRAINT") {
+      return res.status(400).json({ error: "Unable to update board" });
+    }
     next(err);
   }
 });

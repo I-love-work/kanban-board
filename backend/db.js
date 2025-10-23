@@ -49,6 +49,7 @@ db.serialize(() => {
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
       name TEXT NOT NULL,
+      description TEXT DEFAULT '',
       created_at TEXT DEFAULT (datetime('now')),
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     )
@@ -57,6 +58,26 @@ db.serialize(() => {
   db.run(
     "CREATE INDEX IF NOT EXISTS idx_boards_user_id ON boards(user_id)"
   );
+
+  db.all("PRAGMA table_info(boards)", (err, columns) => {
+    if (err) {
+      console.error("Failed to inspect boards table:", err);
+      return;
+    }
+    const hasDescription = columns.some(
+      (column) => column.name === "description"
+    );
+    if (!hasDescription) {
+      db.run(
+        "ALTER TABLE boards ADD COLUMN description TEXT DEFAULT ''",
+        (alterErr) => {
+          if (alterErr) {
+            console.error("Failed to add description column to boards:", alterErr);
+          }
+        }
+      );
+    }
+  });
 
   db.run(`
     CREATE TABLE IF NOT EXISTS tasks (
