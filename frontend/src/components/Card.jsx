@@ -35,12 +35,29 @@ const getReadableTextColor = (hex) => {
   return luminance > 186 ? "#1f2933" : "#ffffff";
 };
 
+const DEFAULT_TASK_COLOR = "#e3f2fd";
+
+const toHex = (value) => value.toString(16).padStart(2, "0");
+
+const lightenColor = (hex, ratio = 0.75) => {
+  const rgb = parseHexColor(hex);
+  if (!rgb) {
+    return DEFAULT_TASK_COLOR;
+  }
+  const normalizedRatio = Math.max(0, Math.min(1, ratio));
+  const r = Math.round(rgb.r + (255 - rgb.r) * normalizedRatio);
+  const g = Math.round(rgb.g + (255 - rgb.g) * normalizedRatio);
+  const b = Math.round(rgb.b + (255 - rgb.b) * normalizedRatio);
+  return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+};
+
 export default function Card({
   task,
   index,
   onDelete,
   onTitleEdit,
   onDescriptionEdit,
+  onColorChange,
   onAttachmentUpload,
   onAttachmentLink,
   onAttachmentDelete,
@@ -53,6 +70,7 @@ export default function Card({
   const [descriptionValue, setDescriptionValue] = useState(
     task.description || ""
   );
+  const [colorValue, setColorValue] = useState(task.color || DEFAULT_TASK_COLOR);
   const [isAddingTag, setIsAddingTag] = useState(false);
   const [tagLabel, setTagLabel] = useState("");
   const [tagColor, setTagColor] = useState("#1976d2");
@@ -69,6 +87,8 @@ export default function Card({
   const [isSavingLink, setIsSavingLink] = useState(false);
   const [pendingAttachmentId, setPendingAttachmentId] = useState(null);
   const fileInputRef = useRef(null);
+  const colorInputRef = useRef(null);
+  const [isSavingColor, setIsSavingColor] = useState(false);
 
   useEffect(() => {
     setTitleValue(task.title);
@@ -77,6 +97,10 @@ export default function Card({
   useEffect(() => {
     setDescriptionValue(task.description || "");
   }, [task.description]);
+
+  useEffect(() => {
+    setColorValue(task.color || DEFAULT_TASK_COLOR);
+  }, [task.color]);
 
   const attachments = Array.isArray(task.attachments) ? task.attachments : [];
   const tags = Array.isArray(task.tags) ? task.tags : [];
@@ -92,7 +116,8 @@ export default function Card({
     isUploading ||
     isSavingLink ||
     isDropActive ||
-    pendingAttachmentId;
+    pendingAttachmentId ||
+    isSavingColor;
 
   const commitTitle = async () => {
     const nextTitle = titleValue.trim();
@@ -273,6 +298,49 @@ export default function Card({
     }
   };
 
+  const handleColorButtonClick = (event) => {
+    if (typeof onColorChange !== "function") {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    if (colorInputRef.current) {
+      colorInputRef.current.click();
+    }
+  };
+
+  const handleTaskColorChange = async (event) => {
+    if (typeof onColorChange !== "function") {
+      return;
+    }
+    const nextColor = event.target.value;
+    if (!nextColor) {
+      return;
+    }
+    if (
+      nextColor === (task.color || DEFAULT_TASK_COLOR) &&
+      nextColor === colorValue
+    ) {
+      return;
+    }
+
+    setColorValue(nextColor);
+    setIsSavingColor(true);
+    try {
+      await onColorChange(nextColor);
+    } catch (err) {
+      console.error("Failed to update task color:", err);
+      setColorValue(task.color || DEFAULT_TASK_COLOR);
+    } finally {
+      setIsSavingColor(false);
+    }
+  };
+
+  const accentColor = colorValue || DEFAULT_TASK_COLOR;
+  const baseBackground = lightenColor(accentColor, 0.78);
+  const draggingBackground = lightenColor(accentColor, 0.6);
+  const dropBackground = lightenColor(accentColor, 0.85);
+
   return (
     <Draggable draggableId={task.id} index={index}>
       {(provided, snapshot) => (
@@ -283,18 +351,50 @@ export default function Card({
           style={{
             position: "relative",
             background: snapshot.isDragging
-              ? "#e8f4ff"
+              ? draggingBackground
               : isDropActive
-              ? "#fffde7"
-              : "#e3f2fd",
+              ? dropBackground
+              : baseBackground,
             borderRadius: 6,
-            padding: 10,
+            padding: "34px 10px 12px 10px",
+            borderLeft: `4px solid ${accentColor}`,
             boxShadow: "0 1px 4px rgba(0,0,0,0.1)",
             userSelect: "none",
             opacity: disableDrag && snapshot.isDragging ? 0.7 : 1,
+            transition: "background 0.2s ease, box-shadow 0.2s ease",
             ...provided.draggableProps.style,
           }}
         >
+          {typeof onColorChange === "function" && (
+            <>
+              <button
+                type="button"
+                onClick={handleColorButtonClick}
+                aria-label="Change task color"
+                style={{
+                  position: "absolute",
+                  top: 6,
+                  left: 6,
+                  width: 26,
+                  height: 26,
+                  borderRadius: 6,
+                  border: "1px solid rgba(30,41,59,0.2)",
+                  background: accentColor,
+                  cursor: "pointer",
+                  padding: 0,
+                  opacity: isSavingColor ? 0.65 : 1,
+                  transition: "opacity 0.2s ease",
+                }}
+              />
+              <input
+                ref={colorInputRef}
+                type="color"
+                value={colorValue}
+                onChange={handleTaskColorChange}
+                style={{ display: "none" }}
+              />
+            </>
+          )}
           {!disableDrag && (
             <button
               onClick={(e) => {

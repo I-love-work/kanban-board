@@ -8,6 +8,7 @@ export default function Column({
   onDelete,
   onTitleUpdate,
   onDescriptionUpdate,
+  onColorUpdate,
   onAttachmentUpload,
   onAttachmentLink,
   onAttachmentDelete,
@@ -52,6 +53,9 @@ export default function Column({
                 onTitleEdit={(title) => onTitleUpdate(droppableId, task.id, title)}
                 onDescriptionEdit={(description) =>
                   onDescriptionUpdate(droppableId, task.id, description)
+                }
+                onColorChange={(color) =>
+                  onColorUpdate(droppableId, task.id, color)
                 }
                 onAttachmentUpload={(files) =>
                   onAttachmentUpload(droppableId, task.id, files)

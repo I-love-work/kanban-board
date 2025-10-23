@@ -86,6 +86,7 @@ db.serialize(() => {
       board_id TEXT,
       title TEXT NOT NULL,
       description TEXT DEFAULT '',
+      color TEXT DEFAULT '#e3f2fd',
       status TEXT NOT NULL,
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
       FOREIGN KEY (board_id) REFERENCES boards(id) ON DELETE CASCADE
@@ -102,6 +103,7 @@ db.serialize(() => {
     );
     const hasUserId = columns.some((column) => column.name === "user_id");
     const hasBoardId = columns.some((column) => column.name === "board_id");
+    const hasColor = columns.some((column) => column.name === "color");
     if (!hasDescription) {
       db.run(
         "ALTER TABLE tasks ADD COLUMN description TEXT DEFAULT ''",
@@ -133,6 +135,16 @@ db.serialize(() => {
       });
     } else {
       ensureTaskBoardIndex();
+    }
+    if (!hasColor) {
+      db.run(
+        "ALTER TABLE tasks ADD COLUMN color TEXT DEFAULT '#e3f2fd'",
+        (alterErr) => {
+          if (alterErr) {
+            console.error("Failed to add color column:", alterErr);
+          }
+        }
+      );
     }
   });
 
