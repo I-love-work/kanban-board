@@ -7,3 +7,6 @@ export const createBoard = async (payload) =>
 
 export const getBoard = async (boardId) =>
   (await client.get(`/boards/${boardId}`)).data;
+
+export const updateBoard = async (boardId, payload) =>
+  (await client.patch(`/boards/${boardId}`, payload)).data;

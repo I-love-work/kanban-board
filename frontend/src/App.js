@@ -277,6 +277,17 @@ function AuthenticatedApp({ user, onLogout, onAuthError }) {
     );
   }, []);
 
+  const handleBoardDetailsChange = useCallback((boardId, updates) => {
+    if (!boardId || !updates || typeof updates !== "object") {
+      return;
+    }
+    setBoards((prev) =>
+      prev.map((board) =>
+        board.id === boardId ? { ...board, ...updates } : board
+      )
+    );
+  }, []);
+
   const handleNavigate = (path) => {
     navigate(path);
     setMenuOpen(false);
@@ -434,6 +445,7 @@ function AuthenticatedApp({ user, onLogout, onAuthError }) {
                   setBoards={setBoards}
                   onAuthError={onAuthError}
                   onTaskCountChange={handleTaskCountChange}
+                  onBoardDetailsChange={handleBoardDetailsChange}
                 />
               }
             />
@@ -452,6 +464,7 @@ function BoardPage({
   setBoards,
   onAuthError,
   onTaskCountChange,
+  onBoardDetailsChange,
 }) {
   const { boardId } = useParams();
   const navigate = useNavigate();
@@ -579,8 +592,10 @@ function BoardPage({
     <Board
       boardId={board.id}
       boardName={board.name}
+      boardDescription={board.description}
       onAuthError={onAuthError}
       onTaskCountChange={onTaskCountChange}
+      onBoardDetailsChange={onBoardDetailsChange}
     />
   );
 }

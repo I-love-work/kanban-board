@@ -1,4 +1,10 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { DragDropContext } from "@hello-pangea/dnd";
 import Column from "./Column";
 import {
@@ -13,17 +19,53 @@ import {
   updateTag as updateTagApi,
   deleteTag as removeTagApi,
 } from "../api/taskApi";
+import { updateBoard as updateBoardApi } from "../api/boardApi";
+
+const DESCRIPTION_PLACEHOLDER = "Double-click to add a description.";
+const LEGACY_DEFAULT_BOARD_DESCRIPTION =
+  "Drag tasks between columns to keep work moving.";
 
 export default function Board({
   boardId,
   boardName,
+  boardDescription,
   onAuthError,
   onTaskCountChange,
+  onBoardDetailsChange,
 }) {
   const [columns, setColumns] = useState(() => createInitialColumns());
   const [newTaskTitle, setNewTaskTitle] = useState("");
   const [isLoading, setIsLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
+  const [isEditingDescription, setIsEditingDescription] = useState(false);
+  const normalizedBoardDescription = useMemo(() => {
+    const raw = boardDescription || "";
+    if (raw.trim() === LEGACY_DEFAULT_BOARD_DESCRIPTION) {
+      return "";
+    }
+    return raw;
+  }, [boardDescription]);
+  const [descriptionDraft, setDescriptionDraft] = useState(
+    normalizedBoardDescription
+  );
+  const [isSavingDescription, setIsSavingDescription] = useState(false);
+  const [descriptionError, setDescriptionError] = useState("");
+  const descriptionInputRef = useRef(null);
+  const skipNextBlurRef = useRef(false);
+
+  useEffect(() => {
+    if (!isEditingDescription) {
+      setDescriptionDraft(normalizedBoardDescription);
+    }
+  }, [isEditingDescription, normalizedBoardDescription]);
+
+  useEffect(() => {
+    if (isEditingDescription && descriptionInputRef.current) {
+      const input = descriptionInputRef.current;
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+    }
+  }, [isEditingDescription]);
 
   const handleApiError = useCallback(
     (err, context) => {
@@ -34,6 +76,110 @@ export default function Board({
     },
     [onAuthError]
   );
+
+  const saveBoardDescription = useCallback(async () => {
+    if (!boardId) {
+      setIsEditingDescription(false);
+      return;
+    }
+    const normalizedDraft = descriptionDraft.trim();
+    const currentNormalized = normalizedBoardDescription.trim();
+    if (currentNormalized === normalizedDraft) {
+      setIsEditingDescription(false);
+      setDescriptionError("");
+      return;
+    }
+    setIsSavingDescription(true);
+    setDescriptionError("");
+    try {
+      const updated = await updateBoardApi(boardId, {
+        description: normalizedDraft,
+      });
+      const sanitizedDescription =
+        (updated.description || "").trim() === LEGACY_DEFAULT_BOARD_DESCRIPTION
+          ? ""
+          : updated.description || "";
+      if (typeof onBoardDetailsChange === "function") {
+        onBoardDetailsChange(boardId, {
+          description: sanitizedDescription,
+        });
+      }
+      setDescriptionDraft(sanitizedDescription);
+      setIsEditingDescription(false);
+      skipNextBlurRef.current = false;
+    } catch (err) {
+      handleApiError(err, "Failed to update board description");
+      setDescriptionError("Failed to update board description. Please try again.");
+      setTimeout(() => {
+        if (descriptionInputRef.current) {
+          descriptionInputRef.current.focus();
+        }
+      }, 0);
+    } finally {
+      setIsSavingDescription(false);
+    }
+  }, [
+    boardId,
+    descriptionDraft,
+    handleApiError,
+    normalizedBoardDescription,
+    onBoardDetailsChange,
+  ]);
+
+  const cancelDescriptionEdit = useCallback(() => {
+    skipNextBlurRef.current = true;
+    setDescriptionDraft(normalizedBoardDescription);
+    setDescriptionError("");
+    setIsEditingDescription(false);
+  }, [normalizedBoardDescription]);
+
+  const handleDescriptionDoubleClick = useCallback(() => {
+    if (!boardId || isSavingDescription) {
+      return;
+    }
+    skipNextBlurRef.current = false;
+    setDescriptionError("");
+    setIsEditingDescription(true);
+  }, [boardId, isSavingDescription]);
+
+  const handleDescriptionChange = useCallback((event) => {
+    setDescriptionDraft(event.target.value);
+  }, []);
+
+  const handleDescriptionKeyDown = useCallback(
+    (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        cancelDescriptionEdit();
+        return;
+      }
+      if (
+        event.key === "Enter" &&
+        (event.metaKey || event.ctrlKey) &&
+        !isSavingDescription
+      ) {
+        event.preventDefault();
+        skipNextBlurRef.current = true;
+        saveBoardDescription();
+      }
+    },
+    [cancelDescriptionEdit, isSavingDescription, saveBoardDescription]
+  );
+
+  const handleDescriptionBlur = useCallback(() => {
+    if (skipNextBlurRef.current) {
+      skipNextBlurRef.current = false;
+      return;
+    }
+    if (!isSavingDescription) {
+      saveBoardDescription();
+    }
+  }, [isSavingDescription, saveBoardDescription]);
+
+  const hasCustomDescription = Boolean(normalizedBoardDescription.trim());
+  const displayDescription = hasCustomDescription
+    ? normalizedBoardDescription
+    : DESCRIPTION_PLACEHOLDER;
 
   const updateLocalTask = (columnId, taskId, updater) => {
     let updatedTask;
@@ -368,9 +514,86 @@ export default function Board({
           <h2 style={{ margin: "0 0 4px 0" }}>
             {boardName || "Untitled board"}
           </h2>
-          <p style={{ margin: 0, color: "#6b7280", fontSize: 14 }}>
-            Drag tasks between columns to keep work moving.
-          </p>
+          {isEditingDescription ? (
+            <div style={{ width: "min(440px, 100%)" }}>
+              <textarea
+                ref={descriptionInputRef}
+                value={descriptionDraft}
+                onChange={handleDescriptionChange}
+                onBlur={handleDescriptionBlur}
+                onKeyDown={handleDescriptionKeyDown}
+                disabled={isSavingDescription}
+                placeholder="Describe this board..."
+                style={{
+                  width: "100%",
+                  minHeight: 72,
+                  padding: "8px 10px",
+                  borderRadius: 6,
+                  border: "1px solid #d1d5db",
+                  fontSize: 14,
+                  lineHeight: 1.45,
+                  color: "#374151",
+                  resize: "vertical",
+                  boxSizing: "border-box",
+                }}
+              />
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  marginTop: 4,
+                }}
+              >
+                <span style={{ color: "#9ca3af", fontSize: 12 }}>
+                  Press Esc to cancel, Ctrl/Cmd+Enter to save
+                </span>
+                {isSavingDescription && (
+                  <span style={{ color: "#6b7280", fontSize: 12 }}>
+                    Saving...
+                  </span>
+                )}
+              </div>
+              {descriptionError && (
+                <p
+                  style={{
+                    margin: "4px 0 0 0",
+                    color: "#dc2626",
+                    fontSize: 12,
+                  }}
+                >
+                  {descriptionError}
+                </p>
+              )}
+            </div>
+          ) : (
+            <>
+              <p
+                onDoubleClick={handleDescriptionDoubleClick}
+                style={{
+                  margin: 0,
+                  color: "#6b7280",
+                  fontSize: 14,
+                  cursor: boardId ? "text" : "default",
+                  fontStyle: hasCustomDescription ? "normal" : "italic",
+                  userSelect: "text",
+                }}
+              >
+                {displayDescription}
+              </p>
+              {descriptionError && (
+                <p
+                  style={{
+                    margin: "4px 0 0 0",
+                    color: "#dc2626",
+                    fontSize: 12,
+                  }}
+                >
+                  {descriptionError}
+                </p>
+              )}
+            </>
+          )}
         </div>
       </div>
 
