@@ -29,6 +29,22 @@ const upload = multer({ storage });
 const DEFAULT_BOARD_DESCRIPTION = "";
 const LEGACY_DEFAULT_BOARD_DESCRIPTION =
   "Drag tasks between columns to keep work moving.";
+const DEFAULT_TASK_COLOR = "#e3f2fd";
+const HEX_COLOR_PATTERN = /^#[0-9A-Fa-f]{6}$/;
+
+const normalizeTaskColor = (value) => {
+  if (typeof value !== "string") {
+    return DEFAULT_TASK_COLOR;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return DEFAULT_TASK_COLOR;
+  }
+  if (!HEX_COLOR_PATTERN.test(trimmed)) {
+    return DEFAULT_TASK_COLOR;
+  }
+  return trimmed.toLowerCase();
+};
 
 const dbRun = (sql, params = []) =>
   new Promise((resolve, reject) => {
@@ -225,6 +241,7 @@ const mergeTaskRelations = (tasks, attachments, tags, req) => {
     title: task.title,
     status: task.status,
     description: task.description || "",
+    color: task.color || DEFAULT_TASK_COLOR,
     attachments: attachmentMap.get(task.id) || [],
     tags: tagMap.get(task.id) || [],
   }));
@@ -502,7 +519,7 @@ app.get("/api/tasks", authenticate, async (req, res, next) => {
 // create a new task
 app.post("/api/tasks", authenticate, async (req, res, next) => {
   try {
-    const { title, status, description, boardId } = req.body || {};
+    const { title, status, description, boardId, color } = req.body || {};
     const trimmedTitle = typeof title === "string" ? title.trim() : "";
     if (!trimmedTitle) {
       return res.status(400).json({ error: "Title is required" });
@@ -523,11 +540,12 @@ app.post("/api/tasks", authenticate, async (req, res, next) => {
       typeof status === "string" && status.trim() ? status.trim() : "todo";
     const descriptionText =
       typeof description === "string" ? description : "";
+    const normalizedColor = normalizeTaskColor(color);
     const id = uuidv4();
     await dbRun(
       `
-        INSERT INTO tasks (id, user_id, board_id, title, description, status)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO tasks (id, user_id, board_id, title, description, color, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
       `,
       [
         id,
@@ -535,6 +553,7 @@ app.post("/api/tasks", authenticate, async (req, res, next) => {
         normalizedBoardId,
         trimmedTitle,
         descriptionText,
+        normalizedColor,
         normalizedStatus,
       ]
     );
@@ -544,6 +563,7 @@ app.post("/api/tasks", authenticate, async (req, res, next) => {
       title: trimmedTitle,
       description: descriptionText,
       status: normalizedStatus,
+      color: normalizedColor,
       attachments: [],
       tags: [],
     });
@@ -555,7 +575,7 @@ app.post("/api/tasks", authenticate, async (req, res, next) => {
 // update a task
 app.put("/api/tasks/:id", authenticate, async (req, res, next) => {
   const { id } = req.params;
-  const { title, status, description, boardId } = req.body || {};
+  const { title, status, description, boardId, color } = req.body || {};
 
   const updates = [];
   const values = [];
@@ -585,6 +605,12 @@ app.put("/api/tasks/:id", authenticate, async (req, res, next) => {
     }
     updates.push("status = ?");
     values.push(normalizedStatus);
+  }
+
+  if (color !== undefined) {
+    const normalizedColor = normalizeTaskColor(color);
+    updates.push("color = ?");
+    values.push(normalizedColor);
   }
 
   if (boardId !== undefined) {
@@ -638,6 +664,7 @@ app.put("/api/tasks/:id", authenticate, async (req, res, next) => {
       title: taskRow.title,
       description: taskRow.description || "",
       status: taskRow.status,
+      color: taskRow.color || DEFAULT_TASK_COLOR,
       attachments: attachmentRows.map((row) => formatAttachment(row, req)),
       tags: tagRows.map((row) => formatTag(row)),
     });

@@ -24,6 +24,20 @@ import { updateBoard as updateBoardApi } from "../api/boardApi";
 const DESCRIPTION_PLACEHOLDER = "Double-click to add a description.";
 const LEGACY_DEFAULT_BOARD_DESCRIPTION =
   "Drag tasks between columns to keep work moving.";
+const DEFAULT_TASK_COLOR = "#e3f2fd";
+const TASK_COLOR_PATTERN = /^#[0-9A-Fa-f]{6}$/;
+const normalizeTaskColor = (value) => {
+  if (typeof value !== "string") {
+    return DEFAULT_TASK_COLOR;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return DEFAULT_TASK_COLOR;
+  }
+  return TASK_COLOR_PATTERN.test(trimmed)
+    ? trimmed.toLowerCase()
+    : DEFAULT_TASK_COLOR;
+};
 
 export default function Board({
   boardId,
@@ -215,6 +229,7 @@ export default function Board({
         const normalizeTask = (task) => ({
           ...task,
           description: task.description || "",
+          color: normalizeTaskColor(task.color),
           attachments: Array.isArray(task.attachments)
             ? task.attachments
             : [],
@@ -281,6 +296,7 @@ export default function Board({
             {
               ...newTask,
               description: newTask.description || "",
+              color: normalizeTaskColor(newTask.color),
               attachments: newTask.attachments || [],
               tags: newTask.tags || [],
             },
@@ -344,6 +360,38 @@ export default function Board({
       });
     } catch (err) {
       handleApiError(err, "Failed to update task description");
+    }
+  };
+
+  const handleColorUpdate = async (columnId, taskId, newColor) => {
+    const targetColumn = columns[columnId];
+    const existingTask = targetColumn?.tasks.find((task) => task.id === taskId);
+    const currentColor = existingTask
+      ? normalizeTaskColor(existingTask.color)
+      : DEFAULT_TASK_COLOR;
+    const normalizedColor = normalizeTaskColor(newColor);
+    if (currentColor === normalizedColor) {
+      return;
+    }
+
+    let previousColor = currentColor;
+    const updatedTask = updateLocalTask(columnId, taskId, (task) => {
+      previousColor = normalizeTaskColor(task.color);
+      return { ...task, color: normalizedColor };
+    });
+    if (!updatedTask) {
+      return;
+    }
+
+    try {
+      await updateTask(taskId, { color: normalizedColor });
+    } catch (err) {
+      updateLocalTask(columnId, taskId, (task) => ({
+        ...task,
+        color: previousColor,
+      }));
+      handleApiError(err, "Failed to update task color");
+      throw err;
     }
   };
 
@@ -693,6 +741,7 @@ export default function Board({
               onDelete={handleDeleteTask}
               onTitleUpdate={handleTitleUpdate}
               onDescriptionUpdate={handleDescriptionUpdate}
+              onColorUpdate={handleColorUpdate}
               onAttachmentUpload={handleAttachmentUpload}
               onAttachmentLink={handleAttachmentLink}
               onAttachmentDelete={handleAttachmentDelete}
