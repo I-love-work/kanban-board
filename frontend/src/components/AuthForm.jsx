@@ -6,6 +6,49 @@ const initialState = {
   name: "",
 };
 
+const PASSWORD_REQUIREMENTS = [
+  { label: "At least 8 characters", test: (value) => value.length >= 8 },
+  { label: "One uppercase letter", test: (value) => /[A-Z]/.test(value) },
+  { label: "One number", test: (value) => /\d/.test(value) },
+  { label: "One symbol", test: (value) => /[^A-Za-z0-9]/.test(value) },
+];
+
+const STRENGTH_LEVELS = [
+  { label: "Too weak", color: "#ef4444" },
+  { label: "Weak", color: "#f97316" },
+  { label: "Fair", color: "#f59e0b" },
+  { label: "Good", color: "#10b981" },
+  { label: "Strong", color: "#059669" },
+];
+
+const getPasswordStrength = (password = "") => {
+  if (!password) {
+    return {
+      label: "Start typing to see tips",
+      color: "#6b7280",
+      percentage: 0,
+      unmet: PASSWORD_REQUIREMENTS.map((req) => req.label),
+      score: 0,
+    };
+  }
+
+  const score = PASSWORD_REQUIREMENTS.reduce(
+    (count, requirement) => (requirement.test(password) ? count + 1 : count),
+    0
+  );
+  const level = STRENGTH_LEVELS[Math.min(score, STRENGTH_LEVELS.length - 1)];
+
+  return {
+    label: level.label,
+    color: level.color,
+    percentage: (score / PASSWORD_REQUIREMENTS.length) * 100,
+    unmet: PASSWORD_REQUIREMENTS.filter((req) => !req.test(password)).map(
+      (req) => req.label
+    ),
+    score,
+  };
+};
+
 export default function AuthForm({
   mode = "login",
   onModeChange,
@@ -15,6 +58,9 @@ export default function AuthForm({
 }) {
   const [formState, setFormState] = useState(initialState);
   const isRegister = mode === "register";
+  const passwordStrength = isRegister
+    ? getPasswordStrength(formState.password)
+    : null;
 
   useEffect(() => {
     setFormState(initialState);
@@ -101,6 +147,62 @@ export default function AuthForm({
             style={inputStyle}
             autoComplete={isRegister ? "new-password" : "current-password"}
           />
+          {isRegister && passwordStrength ? (
+            <div style={{ marginTop: 8 }}>
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  fontSize: 12,
+                  color: "#6b7280",
+                }}
+              >
+                <span>Password strength</span>
+                <span
+                  style={{
+                    color: passwordStrength.color,
+                    fontWeight: 600,
+                  }}
+                >
+                  {passwordStrength.label}
+                </span>
+              </div>
+              <div
+                style={{
+                  height: 6,
+                  borderRadius: 999,
+                  background: "#e5e7eb",
+                  overflow: "hidden",
+                  marginTop: 6,
+                }}
+              >
+                <div
+                  style={{
+                    height: "100%",
+                    width: `${passwordStrength.percentage}%`,
+                    background: passwordStrength.color,
+                    transition: "width 0.25s ease",
+                  }}
+                />
+              </div>
+              {passwordStrength.unmet.length > 0 ? (
+                <ul
+                  style={{
+                    margin: "8px 0 0",
+                    paddingLeft: 18,
+                    color: "#6b7280",
+                    fontSize: 12,
+                    lineHeight: 1.5,
+                    listStyle: "disc",
+                  }}
+                >
+                  {passwordStrength.unmet.map((tip) => (
+                    <li key={tip}>{tip}</li>
+                  ))}
+                </ul>
+              ) : null}
+            </div>
+          ) : null}
         </label>
 
         {error ? (
