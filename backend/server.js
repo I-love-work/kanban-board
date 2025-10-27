@@ -77,6 +77,7 @@ const sanitizeUser = (userRow) =>
         email: userRow.email,
         name: userRow.name || "",
         createdAt: userRow.created_at || userRow.createdAt || null,
+        avatarUrl: userRow.avatar_url || userRow.avatarUrl || null,
       }
     : null;
 
@@ -104,7 +105,7 @@ const authenticate = async (req, res, next) => {
     }
 
     const userRow = await dbGet(
-      "SELECT id, email, name, created_at FROM users WHERE id = ?",
+      "SELECT id, email, name, avatar_url, created_at FROM users WHERE id = ?",
       [payload.id]
     );
 
@@ -283,7 +284,7 @@ app.post("/api/auth/register", async (req, res, next) => {
     );
 
     const userRow = await dbGet(
-      "SELECT id, email, name, created_at FROM users WHERE id = ?",
+      "SELECT id, email, name, avatar_url, created_at FROM users WHERE id = ?",
       [userId]
     );
 
@@ -309,7 +310,7 @@ app.post("/api/auth/login", async (req, res, next) => {
     }
 
     const userRow = await dbGet(
-      "SELECT id, email, name, password_hash, created_at FROM users WHERE email = ?",
+      "SELECT id, email, name, avatar_url, password_hash, created_at FROM users WHERE email = ?",
       [emailRaw]
     );
 
@@ -332,6 +333,67 @@ app.post("/api/auth/login", async (req, res, next) => {
 app.get("/api/auth/me", authenticate, (req, res) => {
   res.json({ user: req.user });
 });
+
+app.post(
+  "/api/profile/avatar",
+  authenticate,
+  upload.single("avatar"),
+  async (req, res, next) => {
+    if (!req.file) {
+      return res.status(400).json({ error: "Avatar file is required" });
+    }
+
+    if (!req.file.mimetype || !req.file.mimetype.startsWith("image/")) {
+      fs.unlink(req.file.path, () => {});
+      return res.status(400).json({ error: "Only image uploads are allowed" });
+    }
+
+    const userId = req.user.id;
+    const relativeUrl = `/uploads/${req.file.filename}`;
+
+    try {
+      const existing = await dbGet(
+        "SELECT avatar_url FROM users WHERE id = ?",
+        [userId]
+      );
+
+      if (existing?.avatar_url) {
+        const existingFilename = path.basename(existing.avatar_url);
+        if (
+          existingFilename &&
+          existingFilename !== req.file.filename
+        ) {
+          fs.unlink(
+            path.join(UPLOAD_DIR, existingFilename),
+            (err) => {
+              if (err && err.code !== "ENOENT") {
+                console.warn(
+                  "Failed to delete previous avatar:",
+                  err
+                );
+              }
+            }
+          );
+        }
+      }
+
+      await dbRun("UPDATE users SET avatar_url = ? WHERE id = ?", [
+        relativeUrl,
+        userId,
+      ]);
+
+      const updatedUser = await dbGet(
+        "SELECT id, email, name, avatar_url, created_at FROM users WHERE id = ?",
+        [userId]
+      );
+
+      res.json({ user: sanitizeUser(updatedUser) });
+    } catch (err) {
+      fs.unlink(req.file.path, () => {});
+      next(err);
+    }
+  }
+);
 
 app.get("/api/boards", authenticate, async (req, res, next) => {
   try {

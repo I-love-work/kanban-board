@@ -19,7 +19,7 @@ import {
   persistAuth,
   register,
 } from "./api/authApi";
-import { getStoredToken } from "./api/client";
+import { getStoredToken, API_ORIGIN } from "./api/client";
 import { createBoard, getBoard, getBoards } from "./api/boardApi";
 
 export default function App() {
@@ -127,6 +127,7 @@ export default function App() {
           user={user}
           onLogout={handleLogout}
           onAuthError={handleUnauthorized}
+          onUserUpdate={setUser}
         />
       )}
     </BrowserRouter>
@@ -150,7 +151,7 @@ function LoadingScreen() {
   );
 }
 
-function AuthenticatedApp({ user, onLogout, onAuthError }) {
+function AuthenticatedApp({ user, onLogout, onAuthError, onUserUpdate }) {
   const navigate = useNavigate();
   const location = useLocation();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -218,6 +219,11 @@ function AuthenticatedApp({ user, onLogout, onAuthError }) {
   }, [user.name, user.email]);
 
   const initials = useMemo(() => getUserInitials(user), [user]);
+  const avatarSrc = useMemo(
+    () => resolveAvatarUrl(user?.avatarUrl),
+    [user?.avatarUrl]
+  );
+  const hasAvatar = Boolean(avatarSrc);
 
   const refreshBoards = useCallback(async () => {
     setBoardLoadError("");
@@ -344,21 +350,37 @@ function AuthenticatedApp({ user, onLogout, onAuthError }) {
                 width: 44,
                 height: 44,
                 borderRadius: "50%",
-                border: "2px solid #c7d2fe",
-                background: "#4338ca",
+                border: hasAvatar ? "2px solid #6366f1" : "2px solid #c7d2fe",
+                background: hasAvatar ? "#ffffff" : "#4338ca",
                 color: "#ffffff",
                 fontWeight: 700,
                 fontSize: 16,
                 cursor: "pointer",
                 position: "relative",
                 boxShadow: menuOpen
-                  ? "0 0 0 4px rgba(99,102,241,0.15)"
+                  ? "0 0 0 4px rgba(99,102,241,0.2)"
                   : "0 6px 16px rgba(17,24,39,0.15)",
+                padding: 0,
+                overflow: "hidden",
               }}
               aria-haspopup="menu"
               aria-expanded={menuOpen}
+              aria-label="User menu"
             >
-              {initials}
+              {hasAvatar ? (
+                <img
+                  src={avatarSrc}
+                  alt="User avatar"
+                  style={{
+                    width: "100%",
+                    height: "100%",
+                    objectFit: "cover",
+                    display: "block",
+                  }}
+                />
+              ) : (
+                initials
+              )}
             </button>
             {menuOpen ? (
               <div
@@ -449,7 +471,16 @@ function AuthenticatedApp({ user, onLogout, onAuthError }) {
                 />
               }
             />
-            <Route path="/profile" element={<ProfilePage user={user} />} />
+            <Route
+              path="/profile"
+              element={
+                <ProfilePage
+                  user={user}
+                  onAvatarUpdated={onUserUpdate}
+                  onAuthError={onAuthError}
+                />
+              }
+            />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </main>
@@ -622,6 +653,15 @@ const menuItemStyle = {
   cursor: "pointer",
   fontSize: 15,
   color: "#1f2937",
+};
+
+const resolveAvatarUrl = (rawUrl) => {
+  if (!rawUrl) return null;
+  if (/^https?:\/\//i.test(rawUrl)) {
+    return rawUrl;
+  }
+  const normalized = rawUrl.startsWith("/") ? rawUrl : `/${rawUrl}`;
+  return `${API_ORIGIN}${normalized}`;
 };
 
 const getUserInitials = (user) => {
