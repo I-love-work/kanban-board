@@ -40,9 +40,32 @@ db.serialize(() => {
       email TEXT NOT NULL UNIQUE,
       password_hash TEXT NOT NULL,
       name TEXT,
-      created_at TEXT DEFAULT (datetime('now'))
+      created_at TEXT DEFAULT (datetime('now')),
+      avatar_url TEXT
     )
   `);
+
+  db.all("PRAGMA table_info(users)", (err, columns) => {
+    if (err) {
+      console.error("Failed to inspect users table:", err);
+      return;
+    }
+
+    const hasAvatarUrl = columns.some(
+      (column) => column.name === "avatar_url"
+    );
+
+    if (!hasAvatarUrl) {
+      db.run(
+        "ALTER TABLE users ADD COLUMN avatar_url TEXT",
+        (alterErr) => {
+          if (alterErr) {
+            console.error("Failed to add avatar_url column:", alterErr);
+          }
+        }
+      );
+    }
+  });
 
   db.run(`
     CREATE TABLE IF NOT EXISTS boards (
