@@ -25,3 +25,6 @@ yarn-error.log*
 backend/*.db
 *.sqlite
 *.sqlite3
+
+# Uploaded assets
+backend/uploads/
