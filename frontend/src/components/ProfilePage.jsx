@@ -1,6 +1,6 @@
-import React, { useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { API_ORIGIN } from "../api/client";
-import { uploadAvatar } from "../api/profileApi";
+import { uploadAvatar, updateProfile } from "../api/profileApi";
 
 const cardStyle = {
   maxWidth: 640,
@@ -97,9 +97,51 @@ const uploadErrorStyle = {
   fontSize: 14,
 };
 
+const nameFormStyle = {
+  marginTop: 0,
+  display: "flex",
+  alignItems: "center",
+  gap: 12,
+};
+
+const nameInputStyle = {
+  flex: 1,
+  padding: "10px 12px",
+  borderRadius: 8,
+  border: "1px solid #cbd5f5",
+  fontSize: 15,
+  outline: "none",
+};
+
+const nameButtonStyle = {
+  padding: "10px 18px",
+  borderRadius: 8,
+  border: "none",
+  background: "#4338ca",
+  color: "#ffffff",
+  fontWeight: 600,
+  cursor: "pointer",
+  minWidth: 120,
+};
+
+const nameHelperTextStyle = {
+  marginTop: 8,
+  fontSize: 13,
+};
+
+const successMessageStyle = {
+  ...nameHelperTextStyle,
+  color: "#16a34a",
+};
+
+const errorMessageStyle = {
+  ...nameHelperTextStyle,
+  color: "#b91c1c",
+};
+
 export default function ProfilePage({
   user,
-  onAvatarUpdated,
+  onProfileUpdated,
   onAuthError,
 }) {
   const [uploading, setUploading] = useState(false);
@@ -110,6 +152,18 @@ export default function ProfilePage({
     [user?.avatarUrl]
   );
   const hasAvatar = Boolean(avatarSrc);
+  const [nameInput, setNameInput] = useState(user?.name || "");
+  const [isSavingName, setIsSavingName] = useState(false);
+  const [nameError, setNameError] = useState("");
+  const [nameSuccess, setNameSuccess] = useState("");
+  const [isEditingName, setIsEditingName] = useState(false);
+
+  useEffect(() => {
+    setNameInput(user?.name || "");
+    setIsEditingName(false);
+    setNameError("");
+    setNameSuccess("");
+  }, [user?.name]);
 
   if (!user) return null;
 
@@ -118,6 +172,9 @@ export default function ProfilePage({
     : "Unknown";
 
   const displayName = user.name || "No display name";
+  const nameInputId = "profile-display-name";
+  const trimmedNameInput = (nameInput || "").trim();
+  const isNameUnchanged = trimmedNameInput === (user.name || "").trim();
 
   const emailProvider =
     typeof user.email === "string" && user.email.includes("@")
@@ -163,8 +220,8 @@ export default function ProfilePage({
 
     try {
       const { user: updatedUser } = await uploadAvatar(file);
-      if (typeof onAvatarUpdated === "function") {
-        onAvatarUpdated(updatedUser);
+      if (typeof onProfileUpdated === "function") {
+        onProfileUpdated(updatedUser);
       }
     } catch (err) {
       if (err?.response?.status === 401) {
@@ -182,6 +239,49 @@ export default function ProfilePage({
       if (input) {
         input.value = "";
       }
+    }
+  };
+
+  const handleNameSubmit = async (event) => {
+    event.preventDefault();
+    setNameError("");
+    setNameSuccess("");
+
+    const trimmed = (nameInput || "").trim();
+    if (trimmed.length > 80) {
+      setNameError("Name must be 80 characters or fewer.");
+      return;
+    }
+
+    const currentName = (user?.name || "").trim();
+    if (trimmed === currentName) {
+      setNameSuccess("Name is already up to date.");
+      return;
+    }
+
+    setIsSavingName(true);
+
+    try {
+      const { user: updatedUser } = await updateProfile({ name: trimmed });
+      if (typeof onProfileUpdated === "function") {
+        onProfileUpdated(updatedUser);
+      }
+      setNameSuccess("Display name updated.");
+      setNameInput(updatedUser?.name || "");
+      setIsEditingName(false);
+    } catch (err) {
+      if (err?.response?.status === 401) {
+        if (typeof onAuthError === "function") {
+          onAuthError();
+        }
+      } else {
+        const message =
+          err?.response?.data?.error ||
+          "Failed to update name. Please try again.";
+        setNameError(message);
+      }
+    } finally {
+      setIsSavingName(false);
     }
   };
 
@@ -265,6 +365,95 @@ export default function ProfilePage({
 
         <section>
           <h2 style={sectionTitleStyle}>Account details</h2>
+          {!isEditingName ? (
+            <div style={infoRowStyle}>
+              <span style={labelStyle}>Display name</span>
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <span style={valueStyle}>
+                  {user.name || "Not set"}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsEditingName(true);
+                    setNameInput(user?.name || "");
+                    setNameError("");
+                    setNameSuccess("");
+                  }}
+                  style={{
+                    padding: "8px 12px",
+                    borderRadius: 6,
+                    border: "1px solid #c7d2fe",
+                    background: "#eef2ff",
+                    color: "#4338ca",
+                    fontWeight: 600,
+                    cursor: "pointer",
+                  }}
+                >
+                  Edit
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div style={{ padding: "12px 0", borderBottom: "1px solid #e5e7eb" }}>
+              <label
+                htmlFor={nameInputId}
+                style={{ fontSize: 14, color: "#6b7280", display: "block", marginBottom: 8 }}
+              >
+                Display name
+              </label>
+              <form style={nameFormStyle} onSubmit={handleNameSubmit}>
+                <input
+                  id={nameInputId}
+                  type="text"
+                  value={nameInput}
+                  onChange={(event) => {
+                    setNameInput(event.target.value);
+                    setNameError("");
+                    setNameSuccess("");
+                  }}
+                  placeholder="Enter your display name"
+                  style={nameInputStyle}
+                  maxLength={80}
+                  autoFocus
+                />
+                <button
+                  type="submit"
+                  disabled={isSavingName || isNameUnchanged}
+                  style={{
+                    ...nameButtonStyle,
+                    cursor:
+                      isSavingName || isNameUnchanged
+                        ? "not-allowed"
+                        : "pointer",
+                    opacity: isSavingName || isNameUnchanged ? 0.75 : 1,
+                  }}
+                >
+                  {isSavingName ? "Saving..." : "Save"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsEditingName(false);
+                    setNameInput(user?.name || "");
+                    setNameError("");
+                    setNameSuccess("");
+                  }}
+                  style={{
+                    ...nameButtonStyle,
+                    background: "#e5e7eb",
+                    color: "#4b5563",
+                  }}
+                >
+                  Cancel
+                </button>
+              </form>
+            </div>
+          )}
+          {nameError ? <div style={errorMessageStyle}>{nameError}</div> : null}
+          {nameSuccess ? (
+            <div style={successMessageStyle}>{nameSuccess}</div>
+          ) : null}
           <div style={infoRowStyle}>
             <span style={labelStyle}>Email</span>
             <span style={valueStyle}>{user.email}</span>

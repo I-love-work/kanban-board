@@ -156,7 +156,7 @@ const ensureDefaultBoardForUser = async (userId) => {
 app.use(
   cors({
     origin: "*",
-    methods: ["GET", "POST", "PUT", "DELETE"],
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allowedHeaders: ["Content-Type", "Authorization"],
   })
 );
@@ -365,6 +365,33 @@ app.post(
     }
   }
 );
+
+app.patch("/api/profile", authenticate, async (req, res, next) => {
+  try {
+    const nameRaw =
+      typeof req.body.name === "string" ? req.body.name.trim() : null;
+
+    if (nameRaw && nameRaw.length > 80) {
+      return res
+        .status(400)
+        .json({ error: "Name must be 80 characters or fewer." });
+    }
+
+    await dbRun("UPDATE users SET name = ? WHERE id = ?", [
+      nameRaw && nameRaw.length ? nameRaw : null,
+      req.user.id,
+    ]);
+
+    const updatedUser = await dbGet(
+      "SELECT id, email, name, avatar_url, created_at FROM users WHERE id = ?",
+      [req.user.id]
+    );
+
+    res.json({ user: sanitizeUser(updatedUser) });
+  } catch (err) {
+    next(err);
+  }
+});
 
 app.get("/api/boards", authenticate, async (req, res, next) => {
   try {

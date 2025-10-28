@@ -464,7 +464,7 @@ function AuthenticatedApp({ user, onLogout, onAuthError, onUserUpdate }) {
               element={
                 <ProfilePage
                   user={user}
-                  onAvatarUpdated={onUserUpdate}
+                  onProfileUpdated={onUserUpdate}
                   onAuthError={onAuthError}
                 />
               }
