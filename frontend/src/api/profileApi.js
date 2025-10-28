@@ -12,3 +12,8 @@ export const uploadAvatar = async (file) => {
 
   return response.data;
 };
+
+export const updateProfile = async (payload) => {
+  const response = await client.patch("/profile", payload);
+  return response.data;
+};
